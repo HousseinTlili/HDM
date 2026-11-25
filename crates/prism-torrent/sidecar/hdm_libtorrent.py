@@ -49,14 +49,23 @@ TOP_PUBLIC_TRACKERS = [
 ]
 
 
-def info_hash_hex(handle_or_ti: Any) -> str:
-    try:
-        ih = handle_or_ti.info_hashes()
-        if ih.has_v1():
-            return str(ih.v1).lower()
-        return str(ih.get_best()).lower()
-    except Exception:
-        return str(handle_or_ti.info_hash()).lower()
+def info_hash_hex(obj: Any) -> str:
+    ih = getattr(obj, "info_hashes", None)
+    if callable(ih):
+        ih = ih()
+    if ih is not None:
+        try:
+            if ih.has_v1():
+                return str(ih.v1).lower()
+            return str(ih.get_best()).lower()
+        except Exception:
+            pass
+    h = getattr(obj, "info_hash", None)
+    if callable(h):
+        h = h()
+    if h is not None:
+        return str(h).lower()
+    raise ValueError(f"cannot extract info_hash from {type(obj).__name__}")
 
 
 def meta_from_torrent_info(ti: lt.torrent_info, ih_hex: str | None = None) -> dict[str, Any]:
