@@ -1,18 +1,18 @@
 //! BitTorrent and magnet-link downloads for HDM.
 //!
-//! Uses the bundled high-speed C++ `aria2c` engine (MSE/PE encryption, pure TCP pipelining,
-//! 256 peers, 64 MiB disk cache, outbound-only safe mode) when available, with automatic
-//! fallback to `librqbit` (also used for offline unit tests).
+//! Uses the bundled `libtorrent-rasterbar` (2.1.x, qBittorrent's exact C++ engine with
+//! TCP + uTP, MSE/PE encryption, DHT/PEX/LSD, UPnP/NAT-PMP, fast-resume, and Force Recheck)
+//! when available, with automatic fallback to `librqbit` v9 (also used for offline unit tests).
 
-mod aria2;
+mod libtorrent;
 
 use anyhow::{Context, Result};
 use librqbit::api::TorrentIdOrHash;
 use librqbit::limits::LimitsConfig;
 use librqbit::{
     AddTorrent, AddTorrentOptions, AddTorrentResponse, ByteBufOwned, ConnectionOptions,
-    ManagedTorrent, PeerConnectionOptions, Session, SessionOptions, SessionPersistenceConfig,
-    TorrentStatsState, ValidatedTorrentMetaV1Info,
+    ListenerMode, ListenerOptions, ManagedTorrent, PeerConnectionOptions, Session, SessionOptions,
+    SessionPersistenceConfig, TorrentStatsState, ValidatedTorrentMetaV1Info,
 };
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
@@ -25,7 +25,7 @@ type ManagedTorrentHandle = Arc<ManagedTorrent>;
 use serde::{Deserialize, Serialize};
 
 fn default_trackers() -> HashSet<url::Url> {
-    aria2::TOP_PUBLIC_TRACKERS
+    libtorrent::TOP_PUBLIC_TRACKERS
         .iter()
         .filter_map(|u| url::Url::parse(u).ok())
         .collect()
@@ -96,7 +96,7 @@ pub struct TorrentProgress {
 }
 
 enum Backend {
-    Aria2(aria2::Aria2Backend),
+    Libtorrent(libtorrent::LibtorrentBackend),
     Librqbit {
         session: Arc<Session>,
         inspected: Mutex<HashMap<String, TorrentMeta>>,
@@ -109,26 +109,26 @@ pub struct TorrentEngine {
 }
 
 impl TorrentEngine {
-    /// Start the session. Prefers the bundled high-speed C++ `aria2c` engine (MSE/PE
-    /// encryption, TCP, outbound-only) and falls back cleanly to `librqbit` (TCP-only,
-    /// outbound-only) if `aria2c` is unavailable.
+    /// Start the session. Prefers the bundled `libtorrent-rasterbar` (qBittorrent's engine)
+    /// and falls back cleanly to `librqbit` v9 (TCP+uTP+UPnP) if unavailable.
     pub async fn start(
         state_dir: &Path,
         default_output: PathBuf,
         keep: &(dyn Fn(&str) -> bool + Send + Sync),
     ) -> Result<Self> {
         std::fs::create_dir_all(state_dir).context("create torrent state dir")?;
-        if let Some(bin) = aria2::find_aria2c() {
-            match aria2::Aria2Backend::start(bin, state_dir, default_output.clone()).await {
-                Ok(a) => {
+        if let Some(bin) = libtorrent::find_libtorrent_sidecar() {
+            match libtorrent::LibtorrentBackend::start(bin, state_dir, default_output.clone()).await
+            {
+                Ok(lt) => {
                     return Ok(Self {
-                        backend: Backend::Aria2(a),
+                        backend: Backend::Libtorrent(lt),
                     });
                 }
                 Err(err) => {
                     tracing::warn!(
                         error = %err,
-                        "aria2c engine failed to start, falling back to librqbit"
+                        "hdm-libtorrent sidecar failed to start, falling back to librqbit"
                     );
                 }
             }
@@ -145,8 +145,11 @@ impl TorrentEngine {
             persistence: Some(SessionPersistenceConfig::Json {
                 folder: Some(state_dir.to_path_buf()),
             }),
-            // Outbound-only TCP mode: avoids uTP slowdown and opens zero router/firewall ports.
-            listen: None,
+            listen: Some(ListenerOptions {
+                mode: ListenerMode::TcpAndUtp,
+                enable_upnp_port_forwarding: true,
+                ..Default::default()
+            }),
             connect: Some(ConnectionOptions {
                 enable_tcp: true,
                 peer_opts,
@@ -158,7 +161,29 @@ impl TorrentEngine {
             client_name_and_version: Some(format!("HDM/{}", env!("CARGO_PKG_VERSION"))),
             ..Default::default()
         };
-        Self::with_options(default_output, opts).await
+        match Self::with_options(default_output.clone(), opts).await {
+            Ok(engine) => Ok(engine),
+            Err(_) => {
+                let fallback_opts = SessionOptions {
+                    fastresume: true,
+                    persistence: Some(SessionPersistenceConfig::Json {
+                        folder: Some(state_dir.to_path_buf()),
+                    }),
+                    listen: None,
+                    connect: Some(ConnectionOptions {
+                        enable_tcp: true,
+                        peer_opts,
+                        ..Default::default()
+                    }),
+                    peer_limit: Some(256),
+                    runtime_worker_threads: Some(16),
+                    trackers: default_trackers(),
+                    client_name_and_version: Some(format!("HDM/{}", env!("CARGO_PKG_VERSION"))),
+                    ..Default::default()
+                };
+                Self::with_options(default_output, fallback_opts).await
+            }
+        }
     }
 
     /// A session that never touches the network (no DHT, trackers, listening or local
@@ -215,17 +240,17 @@ impl TorrentEngine {
     /// Read a torrent's metadata (resolving a magnet via DHT/trackers) without downloading.
     pub async fn inspect(&self, source: &TorrentSource) -> Result<TorrentMeta> {
         match &self.backend {
-            Backend::Aria2(a) => match a.inspect(source).await {
+            Backend::Libtorrent(lt) => match lt.inspect(source).await {
                 Ok(meta) => Ok(meta),
-                Err(aria_err) => {
+                Err(lt_err) => {
                     if matches!(source, TorrentSource::Url(u) if u.trim_start().to_ascii_lowercase().starts_with("magnet:"))
                     {
-                        tracing::warn!(error = %aria_err, "aria2 magnet inspect timed out, falling back to librqbit metadata resolver");
+                        tracing::warn!(error = %lt_err, "libtorrent magnet inspect timed out, falling back to librqbit metadata resolver");
                         if let Ok(meta) = inspect_magnet_with_librqbit(source).await {
                             return Ok(meta);
                         }
                     }
-                    Err(aria_err)
+                    Err(lt_err)
                 }
             },
             Backend::Librqbit { session, inspected } => {
@@ -283,8 +308,8 @@ impl TorrentEngine {
         max_ul_bps: u64,
     ) -> Result<String> {
         match &self.backend {
-            Backend::Aria2(a) => {
-                a.add_with_options(
+            Backend::Libtorrent(lt) => {
+                lt.add_with_options(
                     source,
                     output_folder,
                     only_files,
@@ -338,14 +363,14 @@ impl TorrentEngine {
 
     pub fn is_managed(&self, info_hash: &str) -> bool {
         match &self.backend {
-            Backend::Aria2(a) => a.is_managed(info_hash),
+            Backend::Libtorrent(lt) => lt.is_managed(info_hash),
             Backend::Librqbit { .. } => self.librqbit_handle(info_hash).is_some(),
         }
     }
 
     pub fn meta(&self, info_hash: &str) -> Option<TorrentMeta> {
         match &self.backend {
-            Backend::Aria2(a) => a.meta(info_hash),
+            Backend::Libtorrent(lt) => lt.meta(info_hash),
             Backend::Librqbit { .. } => self
                 .librqbit_handle(info_hash)
                 .and_then(|h| meta_from_handle(&h)),
@@ -354,7 +379,7 @@ impl TorrentEngine {
 
     pub fn progress(&self, info_hash: &str) -> Option<TorrentProgress> {
         match &self.backend {
-            Backend::Aria2(a) => a.progress(info_hash),
+            Backend::Libtorrent(lt) => lt.progress(info_hash),
             Backend::Librqbit { .. } => {
                 let handle = self.librqbit_handle(info_hash)?;
                 let stats = handle.stats();
@@ -389,7 +414,7 @@ impl TorrentEngine {
 
     pub async fn pause(&self, info_hash: &str) -> Result<()> {
         match &self.backend {
-            Backend::Aria2(a) => a.pause(info_hash).await,
+            Backend::Libtorrent(lt) => lt.pause(info_hash).await,
             Backend::Librqbit { session, .. } => {
                 let handle = self.librqbit_handle(info_hash).context("unknown torrent")?;
                 session.pause(&handle).await
@@ -399,7 +424,7 @@ impl TorrentEngine {
 
     pub async fn resume(&self, info_hash: &str) -> Result<()> {
         match &self.backend {
-            Backend::Aria2(a) => a.resume(info_hash).await,
+            Backend::Libtorrent(lt) => lt.resume(info_hash).await,
             Backend::Librqbit { session, .. } => {
                 let handle = self.librqbit_handle(info_hash).context("unknown torrent")?;
                 session.unpause(&handle).await
@@ -420,8 +445,8 @@ impl TorrentEngine {
         max_ul_bps: u64,
     ) -> Result<String> {
         match &self.backend {
-            Backend::Aria2(a) => {
-                a.recheck(
+            Backend::Libtorrent(lt) => {
+                lt.recheck(
                     source,
                     info_hash,
                     output_folder,
@@ -451,8 +476,8 @@ impl TorrentEngine {
         max_ul_bps: Option<u64>,
     ) -> Result<()> {
         match &self.backend {
-            Backend::Aria2(a) => {
-                a.set_torrent_options(info_hash, sequential, extra_trackers, max_dl_bps, max_ul_bps)
+            Backend::Libtorrent(lt) => {
+                lt.set_torrent_options(info_hash, sequential, extra_trackers, max_dl_bps, max_ul_bps)
                     .await
             }
             Backend::Librqbit { .. } => Ok(()),
@@ -463,7 +488,7 @@ impl TorrentEngine {
     /// closed and stay where they are, and the session no longer remembers it.
     pub async fn remove(&self, info_hash: &str, delete_files: bool) -> Result<()> {
         match &self.backend {
-            Backend::Aria2(a) => a.remove(info_hash, delete_files).await,
+            Backend::Libtorrent(lt) => lt.remove(info_hash, delete_files).await,
             Backend::Librqbit { session, .. } => {
                 let id = librqbit::dht::Id20::from_str(info_hash)?;
                 session
@@ -477,7 +502,7 @@ impl TorrentEngine {
     /// value to keep the link usable while seeding.
     pub fn set_limits(&self, download_bps: u64, upload_bps: u64) {
         match &self.backend {
-            Backend::Aria2(a) => a.set_limits(download_bps, upload_bps),
+            Backend::Libtorrent(lt) => lt.set_limits(download_bps, upload_bps),
             Backend::Librqbit { session, .. } => {
                 let nz = |v: u64| NonZeroU32::new(v.min(u32::MAX as u64) as u32);
                 session.ratelimits.set_download_bps(nz(download_bps));
@@ -488,7 +513,7 @@ impl TorrentEngine {
 
     pub async fn shutdown(&self) {
         match &self.backend {
-            Backend::Aria2(a) => a.shutdown().await,
+            Backend::Libtorrent(lt) => lt.shutdown().await,
             Backend::Librqbit { session, .. } => session.stop().await,
         }
     }

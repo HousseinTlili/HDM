@@ -57,7 +57,7 @@
     ],
     "externalBin": [
       "binaries/prism-native-host",
-      "binaries/aria2c"
+      "binaries/hdm-libtorrent"
     ],
     "fileAssociations": [
       {

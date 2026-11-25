@@ -30,7 +30,7 @@
 
 ## Overview
 
-**HDM (Houssein Download Manager)** combines a high-throughput Rust download core, a bundled C++ `aria2c` BitTorrent backend, a native **Ollama + Hugging Face AI Model Hub**, and an advisory **Selective Malware Guard** inside a distraction-free **Stealth Obsidian & Crimson** interface.
+**HDM (Houssein Download Manager)** combines a high-throughput Rust download core, a bundled C++ **`libtorrent-rasterbar` 2.1** BitTorrent engine (the same core engine as qBittorrent), a native **Ollama + Hugging Face AI Model Hub**, and an advisory **Selective Malware Guard** inside a distraction-free **Stealth Obsidian & Crimson** interface.
 
 - **100% Local-First:** No accounts, no cloud sync, no ads, and zero telemetry.
 - **Native Performance:** Rust + Tauri 2 desktop runtime with low memory overhead and crash-safe SQLite persistence.
@@ -43,7 +43,7 @@
 | Area | Capabilities |
 |---|---|
 | **Multi-Segment HTTP(S) / FTP** | Up to **32 parallel connections** (`16` default, `64 MiB` adaptive chunks, HTTP/2 multiplexing, `128 MiB` write buffer), crash-safe resume, ETag/Last-Modified validation, and **Remote ZIP Preview** (browse, search, and extract individual files without downloading the full archive). |
-| **BitTorrent Engine** | Bundled C++ **`aria2c`** daemon with **MSE/PE protocol encryption**, pure TCP pipelining, `64 MiB` RAM disk cache, **DHT / PEX / LPD**, top-20 public trackers, **outbound-only firewall safety** (zero router ports opened), automatic piece re-verification on resume, **Force Recheck**, **Sequential (Head & Tail First)** mode, per-torrent speed caps, and live tracker re-announce. Automatic fallback to `librqbit`. |
+| **BitTorrent Engine** | Bundled C++ **`libtorrent-rasterbar` 2.1** (qBittorrent's exact engine) with **TCP + uTP (BEP-29)**, **MSE/PE protocol encryption**, **DHT / PEX / LSD**, **UPnP / NAT-PMP**, 500 max connections, top-20 public trackers, native fast-resume, **Force Recheck**, **Sequential (Head & Tail First)** mode, per-torrent speed caps, and live tracker re-announce. Automatic fallback to `librqbit` v9. |
 | **AI Model Hub** | Built-in **Ollama Library** and **Hugging Face Hub** browser with automatic **GPU VRAM & system RAM detection**, hardware fit badges, GGUF weight downloads, local model manager, and one-click **Import GGUF into Ollama**. |
 | **Selective Malware Guard** | Pre-download URL/filename screening and post-download SHA-256 scanning combining **local static heuristics**, **MalwareBazaar (abuse.ch)**, and optional **VirusTotal** (filtered to ignore harmless `HackTool`/`Crack`/`Keygen` labels). Strictly advisory — you always choose **Keep** or **Delete**. |
 | **Video & Audio (`yt-dlp` + `ffmpeg`)** | Download video up to 8K/HDR or extract audio (`MP3`, `M4A`, `Opus`, `FLAC`, `WAV`) across 1,800+ sites with subtitle/chapter/thumbnail embedding and SponsorBlock support. |
@@ -61,7 +61,7 @@ flowchart LR
     SHELL["Tauri 2 Shell\napp/src-tauri"]
     CORE["prism-core\nSQLite · Queues · Scheduler · IPC"]
     HTTP["prism-engine\n32-Segment HTTP/2 & FTP"]
-    BT["prism-torrent\nBundled C++ aria2c + librqbit fallback"]
+    BT["prism-torrent\nBundled libtorrent 2.1 + librqbit fallback"]
     VID["prism-video\nyt-dlp · ffmpeg · deno"]
     SEC["security.rs\nHeuristics · MalwareBazaar · Filtered VT"]
     AI["ollama.rs\nOllama Registry · Local GGUF · VRAM Probe"]
@@ -85,7 +85,7 @@ flowchart LR
 | `app/src-tauri/` | Tauri 2 desktop host, IPC commands, `ollama.rs` Model Hub, and `security.rs` Malware Guard |
 | `crates/prism-engine/` | Multi-segment HTTP(S)/FTP transfer engine, adaptive chunk scheduler, and buffered disk writer |
 | `crates/prism-core/` | Queue manager, SQLite state store, scheduler, batch/site grabber, and browser IPC bridge |
-| `crates/prism-torrent/` | BitTorrent facade (`aria2c` JSON-RPC backend + `librqbit` fallback) |
+| `crates/prism-torrent/` | BitTorrent facade (`libtorrent-rasterbar` 2.1 sidecar + `librqbit` fallback) |
 | `crates/prism-video/` | `yt-dlp` / `ffmpeg` toolchain manager, format probing, and muxing pipeline |
 | `crates/prism-native-host/` | Native messaging companion binary and cross-browser host registration |
 | `extension/` | Browser extension source and Chromium/Firefox build pipeline |
@@ -111,13 +111,13 @@ HDM's Malware Guard is designed to catch **real threats** without annoying false
 
 ## BitTorrent Engine
 
-HDM ships with an isolated, outbound-only **C++ `aria2c`** BitTorrent backend (with automatic `librqbit` fallback):
+HDM ships with a bundled standalone **`libtorrent-rasterbar` 2.1** C++ engine (the same BitTorrent engine powering qBittorrent), with automatic `librqbit` v9 fallback:
 
-- **Protocol & Throughput:** Pure TCP pipelining, MSE/PE protocol encryption negotiation, `64 MiB` disk cache, instant NTFS allocation (`--file-allocation=none`), unlimited peer hunting (`--bt-max-peers=0`), DHT (IPv4 + IPv6 bootstrap), PEX, LPD, and 20 built-in public trackers.
-- **Firewall Safety:** Strict **outbound-only** posture — zero UPnP and zero router/firewall ports opened. Local JSON-RPC binds exclusively to `127.0.0.1` on an ephemeral port with a per-session random token.
+- **Protocol & Throughput:** Dual **TCP + uTP (BEP-29)** with `prefer_tcp` mixed-mode algorithm, **MSE/PE protocol encryption** (`prefer_rc4`), **DHT / PEX / LSD**, **UPnP / NAT-PMP**, 500 max connections, 8 AIO threads, simultaneous multi-tier tracker announces, and 20 built-in public trackers.
+- **Fast Resume & Piece Verification:** Automatically saves `.fastresume` bitfields on pause/exit and hash-checks existing partial files on disk when resuming across sessions.
 - **Swarm Controls (Settings → BitTorrent & Right-Click Menu):**
-  - **Force Recheck:** Hash-verifies existing files on disk and repairs missing/corrupt pieces.
-  - **Sequential Download:** Prioritizes head & tail pieces (`32 MiB`) for early media preview.
+  - **Force Recheck:** Native `libtorrent` piece verification to repair missing or corrupt pieces.
+  - **Sequential Download:** Downloads pieces in order for early media preview.
   - **Per-Torrent Caps & Extra Trackers:** Independent DL/UL caps (`MB/s`) and live tracker re-announce.
 
 ---
@@ -169,7 +169,7 @@ Generated artifacts:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\make-portable.ps1
 ```
-Outputs `packaging/out/HDM-0.1.0-windows-x64-portable.zip` (self-contained with `portable.txt`, `hdm.exe`, `aria2c.exe`, `prism-native-host.exe`, and browser extensions).
+Outputs `packaging/out/HDM-0.1.0-windows-x64-portable.zip` (self-contained with `portable.txt`, `hdm.exe`, `hdm-libtorrent.exe`, `prism-native-host.exe`, and browser extensions).
 
 ---
 
@@ -178,4 +178,4 @@ Outputs `packaging/out/HDM-0.1.0-windows-x64-portable.zip` (self-contained with 
 HDM is open-source software licensed under the **[MIT License](LICENSE)**.
 
 - Core Rust transfer, queue, media, and native-messaging crates build upon the MIT-licensed **[Prism Download Manager](https://github.com/FortoGraphy/prism-download-manager)**.
-- BitTorrent swarm backend bundles **[aria2](https://aria2.github.io/)**.
+- BitTorrent swarm backend is powered by **[libtorrent-rasterbar](https://www.libtorrent.org/)**.

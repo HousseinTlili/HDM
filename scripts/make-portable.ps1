@@ -14,9 +14,9 @@ Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $stage | Out-Null
 Copy-Item (Join-Path $release "hdm.exe") $stage
 Copy-Item (Join-Path $root "app\src-tauri\binaries\prism-native-host-$Target.exe") (Join-Path $stage "prism-native-host.exe")
-$aria2Bin = Join-Path $root "app\src-tauri\binaries\aria2c-$Target.exe"
-if (Test-Path $aria2Bin) {
-  Copy-Item $aria2Bin (Join-Path $stage "aria2c.exe")
+$ltBin = Join-Path $root "app\src-tauri\binaries\hdm-libtorrent-$Target.exe"
+if (Test-Path $ltBin) {
+  Copy-Item $ltBin (Join-Path $stage "hdm-libtorrent.exe")
 }
 # portable.txt switches the data directory to .\data next to hdm.exe
 Set-Content -Path (Join-Path $stage "portable.txt") -Value "HDM portable mode: settings and history are stored in the data folder next to hdm.exe." -Encoding utf8

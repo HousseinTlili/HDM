@@ -141,7 +141,7 @@ export function TorrentInspector({
               BitTorrent Engine
             </span>
             <span className="font-mono text-mono-sm text-status-connected">
-              MSE/PE · TCP · DHT / PEX / LPD
+              libtorrent 2.1 · TCP/uTP · MSE/PE
             </span>
           </div>
           {infoHash && (

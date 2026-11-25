@@ -565,13 +565,13 @@ export function TorrentSection({
 
   return (
     <div className="flex flex-col gap-5">
-      <SettingsCard title="High-Speed BitTorrent Engine">
+      <SettingsCard title="High-Speed BitTorrent Engine (libtorrent)">
         <SettingRow
           title="Peer Discovery & Transport"
-          description="Bundled C++ aria2c engine with MSE/PE encryption, pure TCP pipelining, 64 MiB disk cache, unlimited peer hunting, top-20 public trackers, and outbound-only firewall safety (zero router ports opened)"
+          description="Bundled C++ libtorrent-rasterbar 2.1 (qBittorrent's exact engine) with TCP + uTP, MSE/PE encryption, DHT/PEX/LSD, UPnP/NAT-PMP, 500 max connections, and fast-resume"
         >
           <span className="font-mono text-mono-sm px-2.5 py-1 rounded-sm bg-status-connected-tint border border-status-connected/30 text-status-connected">
-            aria2c C++ · MSE/PE · TCP · Outbound-Only
+            libtorrent 2.1 · TCP/uTP · MSE/PE · DHT/PEX/LSD
           </span>
         </SettingRow>
 
