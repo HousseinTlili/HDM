@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>High-velocity, local-first desktop download manager engineered for power users.</strong><br>
-  Multi-connection HTTP/FTP · C++ BitTorrent Engine · AI Model Hub · Selective Malware Guard
+  Multi-connection HTTP/FTP · Real C++ libtorrent 2.1 Engine · AI Model Hub · Selective Malware Guard
 </p>
 
 <p align="center">
@@ -18,12 +18,17 @@
 </p>
 
 <p align="center">
+  <a href="#screenshots">Screenshots</a> ·
   <a href="#key-capabilities">Key Capabilities</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="#selective-malware-guard">Malware Guard</a> ·
   <a href="#bittorrent-engine">BitTorrent Engine</a> ·
   <a href="#keyboard-shortcuts">Shortcuts</a> ·
   <a href="#build--packaging">Build &amp; Packaging</a>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/hdm/dashboard-live.jpg" width="900" alt="HDM Live Dashboard with BitTorrent Swarm Inspector and Telemetry">
 </p>
 
 ---
@@ -38,12 +43,39 @@
 
 ---
 
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="docs/screenshots/hdm/downloads.png" alt="HDM Seamless Stealth Obsidian Workspace"><br>
+      <sub><b>Seamless Obsidian Workspace</b> — Unified chrome, smooth interior edges, built-in speed test widget, and Transfer Inspector.</sub>
+    </td>
+    <td width="50%">
+      <img src="docs/screenshots/hdm/settings.png" alt="HDM Engine & Connection Limits Settings"><br>
+      <sub><b>Engine &amp; Throughput Profiles</b> — One-click 8x / 16x / 32x HTTP profiles, concurrency controls, and integrity settings.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="docs/screenshots/hdm/models.png" alt="HDM AI Model Hub for Ollama and Hugging Face"><br>
+      <sub><b>AI Model Hub</b> — Browse Ollama &amp; Hugging Face models with live RAM / GPU VRAM hardware fit checks.</sub>
+    </td>
+    <td width="50%">
+      <img src="docs/screenshots/hdm/dashboard-live.jpg" alt="HDM Live BitTorrent Swarm and yt-dlp Transfers"><br>
+      <sub><b>Live Multi-Protocol Queue</b> — Active BitTorrent swarm with real-time throughput graph, average-speed ETA, and completed <code>yt-dlp</code> audio.</sub>
+    </td>
+  </tr>
+</table>
+
+---
+
 ## Key Capabilities
 
 | Area | Capabilities |
 |---|---|
 | **Multi-Segment HTTP(S) / FTP** | Up to **32 parallel connections** (`16` default, `64 MiB` adaptive chunks, HTTP/2 multiplexing, `128 MiB` write buffer), crash-safe resume, ETag/Last-Modified validation, and **Remote ZIP Preview** (browse, search, and extract individual files without downloading the full archive). |
-| **BitTorrent Engine** | Bundled C++ **`libtorrent-rasterbar` 2.1** (qBittorrent's exact engine) with **TCP + uTP (BEP-29)**, **MSE/PE protocol encryption**, **DHT / PEX / LSD**, **UPnP / NAT-PMP**, 500 max connections, top-20 public trackers, native fast-resume, **Force Recheck**, **Sequential (Head & Tail First)** mode, per-torrent speed caps, and live tracker re-announce. Automatic fallback to `librqbit` v9. |
+| **BitTorrent Engine** | Bundled C++ **`libtorrent-rasterbar` 2.1** (qBittorrent's exact engine) with **TCP + uTP (BEP-29)**, **MSE/PE protocol encryption**, **DHT / PEX / LSD**, **UPnP / NAT-PMP**, top-20 public trackers, native fast-resume, **Force Recheck**, **Sequential (Head & Tail First)** mode, per-torrent speed caps, and live tracker re-announce. Automatic fallback to `librqbit` v9. |
 | **AI Model Hub** | Built-in **Ollama Library** and **Hugging Face Hub** browser with automatic **GPU VRAM & system RAM detection**, hardware fit badges, GGUF weight downloads, local model manager, and one-click **Import GGUF into Ollama**. |
 | **Selective Malware Guard** | Pre-download URL/filename screening and post-download SHA-256 scanning combining **local static heuristics**, **MalwareBazaar (abuse.ch)**, and optional **VirusTotal** (filtered to ignore harmless `HackTool`/`Crack`/`Keygen` labels). Strictly advisory — you always choose **Keep** or **Delete**. |
 | **Video & Audio (`yt-dlp` + `ffmpeg`)** | Download video up to 8K/HDR or extract audio (`MP3`, `M4A`, `Opus`, `FLAC`, `WAV`) across 1,800+ sites with subtitle/chapter/thumbnail embedding and SponsorBlock support. |
@@ -113,7 +145,7 @@ HDM's Malware Guard is designed to catch **real threats** without annoying false
 
 HDM ships with a bundled standalone **`libtorrent-rasterbar` 2.1** C++ engine (the same BitTorrent engine powering qBittorrent), with automatic `librqbit` v9 fallback:
 
-- **Protocol & Throughput:** Dual **TCP + uTP (BEP-29)** with `prefer_tcp` mixed-mode algorithm, **MSE/PE protocol encryption** (`prefer_rc4`), **DHT / PEX / LSD**, **UPnP / NAT-PMP**, 500 max connections, 8 AIO threads, simultaneous multi-tier tracker announces, and 20 built-in public trackers.
+- **Protocol & Throughput:** Dual **TCP + uTP (BEP-29)** with `prefer_tcp` mixed-mode algorithm, **MSE/PE protocol encryption** (`prefer_rc4`), **DHT / PEX / LSD**, **UPnP / NAT-PMP**, simultaneous multi-tier tracker announces, and 20 built-in public trackers.
 - **Fast Resume & Piece Verification:** Automatically saves `.fastresume` bitfields on pause/exit and hash-checks existing partial files on disk when resuming across sessions.
 - **Swarm Controls (Settings → BitTorrent & Right-Click Menu):**
   - **Force Recheck:** Native `libtorrent` piece verification to repair missing or corrupt pieces.

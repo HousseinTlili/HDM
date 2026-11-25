@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { inTauri } from "../lib/window";
 import type {
   AppView,
   HdmIntent,
@@ -71,8 +72,15 @@ interface UiState {
 
 let toastSeq = 0;
 
+function initialPreviewView(): AppView {
+  if (typeof window === "undefined" || inTauri) return "downloads";
+  const v = new URLSearchParams(window.location.search).get("view");
+  if (v === "models" || v === "scheduler" || v === "settings") return v;
+  return "downloads";
+}
+
 export const useUiStore = create<UiState>((set) => ({
-  activeView: "downloads",
+  activeView: initialPreviewView(),
   activeFilter: "all",
   modelHubTab: "ollama",
   settingsSection: "engine",
