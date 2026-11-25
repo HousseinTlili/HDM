@@ -10,6 +10,7 @@ import {
   setVirusTotalApiKey,
 } from "../../lib/security";
 import type { Category, ConflictAction, Settings } from "../../lib/types";
+import { useDownloadsStore } from "../../store/downloadsStore";
 import { useUiStore } from "../../store/uiStore";
 import { SettingRow, SettingsCard, ToggleSwitch } from "./SettingControls";
 
@@ -515,12 +516,59 @@ export function TorrentSection({
   draft: Settings;
   dataDir: string;
 }) {
+  const itemsById = useDownloadsStore((s) => s.itemsById);
+  const itemOrder = useDownloadsStore((s) => s.itemOrder);
+  const pushToast = useUiStore((s) => s.pushToast);
+
+  const torrents = itemOrder
+    .map((id) => itemsById[id])
+    .filter((i) => i && !i.trashed && i.kind === "torrent" && i.status !== "completed");
+  const [selectedTorrentId, setSelectedTorrentId] = useState<string>(
+    () => torrents[0]?.id ?? ""
+  );
+  const activeTorrent =
+    (selectedTorrentId ? itemsById[selectedTorrentId] : undefined) ?? torrents[0];
+
+  const sequential = Boolean(activeTorrent?.request?.sequential);
+  const savedDlBps =
+    typeof activeTorrent?.request?.maxDlBps === "number"
+      ? activeTorrent.request.maxDlBps
+      : 0;
+  const savedUlBps =
+    typeof activeTorrent?.request?.maxUlBps === "number"
+      ? activeTorrent.request.maxUlBps
+      : 0;
+  const savedTrackers = Array.isArray(activeTorrent?.request?.extraTrackers)
+    ? (activeTorrent.request.extraTrackers as string[])
+    : [];
+
+  const [dlDraft, setDlDraft] = useState(() =>
+    savedDlBps > 0 ? Number((savedDlBps / (1024 * 1024)).toFixed(2)).toString() : "0"
+  );
+  const [ulDraft, setUlDraft] = useState(() =>
+    savedUlBps > 0 ? Number((savedUlBps / (1024 * 1024)).toFixed(2)).toString() : "0"
+  );
+  const [trackersDraft, setTrackersDraft] = useState(() => savedTrackers.join("\n"));
+
+  const selectTorrent = (id: string) => {
+    setSelectedTorrentId(id);
+    const t = itemsById[id];
+    const dl = typeof t?.request?.maxDlBps === "number" ? t.request.maxDlBps : 0;
+    const ul = typeof t?.request?.maxUlBps === "number" ? t.request.maxUlBps : 0;
+    const tr = Array.isArray(t?.request?.extraTrackers)
+      ? (t.request.extraTrackers as string[])
+      : [];
+    setDlDraft(dl > 0 ? Number((dl / (1024 * 1024)).toFixed(2)).toString() : "0");
+    setUlDraft(ul > 0 ? Number((ul / (1024 * 1024)).toFixed(2)).toString() : "0");
+    setTrackersDraft(tr.join("\n"));
+  };
+
   return (
     <div className="flex flex-col gap-5">
       <SettingsCard title="High-Speed BitTorrent Engine">
         <SettingRow
           title="Peer Discovery & Transport"
-          description="Bundled C++ aria2c engine with MSE/PE encryption, pure TCP pipelining, 64 MiB disk cache, 256 peers, top-20 public trackers, and outbound-only firewall safety (zero router ports opened)"
+          description="Bundled C++ aria2c engine with MSE/PE encryption, pure TCP pipelining, 64 MiB disk cache, unlimited peer hunting, top-20 public trackers, and outbound-only firewall safety (zero router ports opened)"
         >
           <span className="font-mono text-mono-sm px-2.5 py-1 rounded-sm bg-status-connected-tint border border-status-connected/30 text-status-connected">
             aria2c C++ · MSE/PE · TCP · Outbound-Only
@@ -546,6 +594,158 @@ export function TorrentSection({
               : "Unthrottled"}
           </span>
         </SettingRow>
+      </SettingsCard>
+
+      <SettingsCard title="Swarm Controls (Per-Torrent)">
+        {torrents.length === 0 ? (
+          <div className="px-4 py-3 font-body text-body-sm text-on-surface-variant">
+            No active or paused torrents right now. Add a torrent to configure sequential mode, per-torrent speed caps, or extra trackers here.
+          </div>
+        ) : (
+          <>
+            <SettingRow
+              title="Target Torrent"
+              description="Select which torrent's swarm options to adjust"
+            >
+              <select
+                value={activeTorrent?.id ?? ""}
+                onChange={(e) => selectTorrent(e.target.value)}
+                className="w-72 h-8 px-2.5 rounded bg-surface border border-outline font-label text-label-md text-on-surface"
+              >
+                {torrents.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.fileName || t.url}
+                  </option>
+                ))}
+              </select>
+            </SettingRow>
+
+            <SettingRow
+              title="Sequential Download (Head & Tail First)"
+              description="Prioritize the start and end pieces so media files can be previewed early"
+            >
+              <ToggleSwitch
+                checked={sequential}
+                onChange={(checked) => {
+                  if (!activeTorrent) return;
+                  void ipc
+                    .setTorrentOptions({ id: activeTorrent.id, sequential: checked })
+                    .then(() =>
+                      pushToast(
+                        "info",
+                        checked
+                          ? "Sequential mode ON (head & tail prioritized)"
+                          : "Sequential mode OFF (rarest-first)"
+                      )
+                    )
+                    .catch((err) =>
+                      pushToast("error", err instanceof Error ? err.message : String(err))
+                    );
+                }}
+                label="Toggle sequential download"
+              />
+            </SettingRow>
+
+            <SettingRow
+              title="Per-Torrent DL / UL Caps (MB/s)"
+              description="Set 0 for unlimited speed on this torrent"
+            >
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={dlDraft}
+                  onChange={(e) => setDlDraft(e.target.value)}
+                  aria-label="Per-torrent download cap MB/s"
+                  className="w-20 h-8 px-2 rounded bg-surface border border-outline font-mono text-mono-sm text-on-surface"
+                />
+                <span className="font-mono text-mono-sm text-on-surface-variant">DL</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={ulDraft}
+                  onChange={(e) => setUlDraft(e.target.value)}
+                  aria-label="Per-torrent upload cap MB/s"
+                  className="w-20 h-8 px-2 rounded bg-surface border border-outline font-mono text-mono-sm text-on-surface"
+                />
+                <span className="font-mono text-mono-sm text-on-surface-variant">UL</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!activeTorrent) return;
+                    const dlMb = Number(dlDraft);
+                    const ulMb = Number(ulDraft);
+                    void ipc
+                      .setTorrentOptions({
+                        id: activeTorrent.id,
+                        maxDlBps:
+                          Number.isFinite(dlMb) && dlMb > 0
+                            ? Math.round(dlMb * 1024 * 1024)
+                            : 0,
+                        maxUlBps:
+                          Number.isFinite(ulMb) && ulMb > 0
+                            ? Math.round(ulMb * 1024 * 1024)
+                            : 0,
+                      })
+                      .then(() => pushToast("success", "Updated per-torrent speed limits"))
+                      .catch((err) =>
+                        pushToast("error", err instanceof Error ? err.message : String(err))
+                      );
+                  }}
+                  className="h-8 px-3 rounded bg-surface-container-high border border-outline font-label text-label-sm text-on-surface hover:border-primary/40"
+                >
+                  Apply
+                </button>
+              </div>
+            </SettingRow>
+
+            <SettingRow
+              title="Extra Trackers & Re-announce"
+              description="Add custom tracker URLs (one per line) and re-announce to find more peers"
+            >
+              <div className="flex items-center gap-2">
+                <textarea
+                  rows={2}
+                  value={trackersDraft}
+                  onChange={(e) => setTrackersDraft(e.target.value)}
+                  placeholder="udp://tracker.example:1337/announce"
+                  className="w-60 p-2 rounded bg-surface border border-outline font-mono text-mono-sm text-on-surface placeholder:text-on-surface-variant resize-none focus:outline-none focus:border-primary"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!activeTorrent) return;
+                    const list = trackersDraft
+                      .split(/[\r\n,]+/)
+                      .map((s) => s.trim())
+                      .filter(Boolean);
+                    void ipc
+                      .setTorrentOptions({
+                        id: activeTorrent.id,
+                        extraTrackers: list,
+                      })
+                      .then(() =>
+                        pushToast(
+                          "success",
+                          list.length > 0
+                            ? `Added ${list.length} tracker(s) & re-announced`
+                            : "Cleared custom trackers"
+                        )
+                      )
+                      .catch((err) =>
+                        pushToast("error", err instanceof Error ? err.message : String(err))
+                      );
+                  }}
+                  className="h-8 px-3 rounded bg-surface-container-high border border-outline font-label text-label-sm text-on-surface hover:border-primary/40"
+                >
+                  Re-announce
+                </button>
+              </div>
+            </SettingRow>
+          </>
+        )}
       </SettingsCard>
     </div>
   );

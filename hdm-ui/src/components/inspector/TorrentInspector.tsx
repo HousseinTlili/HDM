@@ -50,23 +50,8 @@ export function TorrentInspector({
   const avgEtaSecs = computeAverageEtaSecs(downloaded, totalSize, avgSpeed);
   const infoHash =
     typeof item.request?.infoHash === "string" ? item.request.infoHash : null;
-  const sequential = Boolean(item.request?.sequential);
-  const savedDlBps =
-    typeof item.request?.maxDlBps === "number" ? item.request.maxDlBps : 0;
-  const savedUlBps =
-    typeof item.request?.maxUlBps === "number" ? item.request.maxUlBps : 0;
-  const savedTrackers = Array.isArray(item.request?.extraTrackers)
-    ? (item.request?.extraTrackers as string[])
-    : [];
 
   const [rechecking, setRechecking] = useState(false);
-  const [dlDraft, setDlDraft] = useState(() =>
-    savedDlBps > 0 ? Number((savedDlBps / (1024 * 1024)).toFixed(2)).toString() : "0"
-  );
-  const [ulDraft, setUlDraft] = useState(() =>
-    savedUlBps > 0 ? Number((savedUlBps / (1024 * 1024)).toFixed(2)).toString() : "0"
-  );
-  const [trackersDraft, setTrackersDraft] = useState(() => savedTrackers.join("\n"));
 
   const handleRecheck = async () => {
     if (rechecking) return;
@@ -78,53 +63,6 @@ export function TorrentInspector({
       pushToast("error", err instanceof Error ? err.message : String(err));
     } finally {
       setRechecking(false);
-    }
-  };
-
-  const handleToggleSequential = async () => {
-    try {
-      await ipc.setTorrentOptions({ id: item.id, sequential: !sequential });
-      pushToast(
-        "info",
-        !sequential
-          ? "Sequential mode ON (head & tail pieces prioritized)"
-          : "Sequential mode OFF (rarest-first)"
-      );
-    } catch (err) {
-      pushToast("error", err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const handleCommitLimits = async () => {
-    const dlMb = Number(dlDraft);
-    const ulMb = Number(ulDraft);
-    const maxDlBps =
-      Number.isFinite(dlMb) && dlMb > 0 ? Math.round(dlMb * 1024 * 1024) : 0;
-    const maxUlBps =
-      Number.isFinite(ulMb) && ulMb > 0 ? Math.round(ulMb * 1024 * 1024) : 0;
-    try {
-      await ipc.setTorrentOptions({ id: item.id, maxDlBps, maxUlBps });
-      pushToast("success", "Updated per-torrent speed limits");
-    } catch (err) {
-      pushToast("error", err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const handleApplyTrackers = async () => {
-    const list = trackersDraft
-      .split(/[\r\n,]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    try {
-      await ipc.setTorrentOptions({ id: item.id, extraTrackers: list });
-      pushToast(
-        "success",
-        list.length > 0
-          ? `Added ${list.length} custom tracker(s) & re-announced`
-          : "Cleared custom trackers"
-      );
-    } catch (err) {
-      pushToast("error", err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -228,79 +166,6 @@ export function TorrentInspector({
             </span>
           </div>
         )}
-
-        <div className="rounded-md bg-surface border border-outline p-3 flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <span className="font-label text-label-sm uppercase tracking-wider text-on-surface-variant">
-              Swarm Controls
-            </span>
-            <button
-              type="button"
-              onClick={() => void handleToggleSequential()}
-              className={`h-6 px-2 rounded-sm border font-mono text-mono-sm transition-colors duration-state-change ${
-                sequential
-                  ? "bg-primary-tint border-primary/40 text-on-primary-badge"
-                  : "bg-surface-container-high border-outline text-on-surface-variant hover:text-on-surface"
-              }`}
-              title="Download head & tail pieces first so you can preview media early"
-            >
-              {sequential ? "Sequential: ON" : "Sequential: OFF"}
-            </button>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <label className="flex flex-col gap-1">
-              <span className="font-label text-label-sm text-on-surface-variant">
-                DL Cap (MB/s, 0=max)
-              </span>
-              <input
-                type="number"
-                min={0}
-                step={0.5}
-                value={dlDraft}
-                onChange={(e) => setDlDraft(e.target.value)}
-                onBlur={() => void handleCommitLimits()}
-                className="h-7 px-2 rounded bg-surface-container border border-outline font-mono text-mono-sm text-on-surface"
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="font-label text-label-sm text-on-surface-variant">
-                UL Cap (MB/s, 0=max)
-              </span>
-              <input
-                type="number"
-                min={0}
-                step={0.5}
-                value={ulDraft}
-                onChange={(e) => setUlDraft(e.target.value)}
-                onBlur={() => void handleCommitLimits()}
-                className="h-7 px-2 rounded bg-surface-container border border-outline font-mono text-mono-sm text-on-surface"
-              />
-            </label>
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-center justify-between">
-              <span className="font-label text-label-sm text-on-surface-variant">
-                Extra Trackers
-              </span>
-              <button
-                type="button"
-                onClick={() => void handleApplyTrackers()}
-                className="h-6 px-2 rounded-sm bg-surface-container-high border border-outline font-label text-label-sm text-on-surface hover:border-primary/40"
-              >
-                Re-announce
-              </button>
-            </div>
-            <textarea
-              rows={2}
-              value={trackersDraft}
-              onChange={(e) => setTrackersDraft(e.target.value)}
-              placeholder="udp://tracker.example:1337/announce"
-              className="w-full p-2 rounded bg-surface-container border border-outline font-mono text-mono-sm text-on-surface placeholder:text-on-surface-variant resize-none focus:outline-none focus:border-primary"
-            />
-          </div>
-        </div>
 
         <div className="flex flex-col gap-1">
           <span className="font-label text-label-sm uppercase tracking-wider text-on-surface-variant">

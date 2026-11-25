@@ -18,6 +18,7 @@ const MAX_FALLBACK_SAMPLES = 30;
 interface SessionSpeedTracker {
   startedAtMs: number;
   startBytes: number;
+  prevDownloaded: number;
   speedSamples: number[];
 }
 
@@ -190,18 +191,34 @@ export const useDownloadsStore = create<DownloadsState>((set) => ({
             totalSpeed += p.speed;
 
             let tracker = sessionSpeedTrackers.get(p.id);
-            if (!tracker || p.downloaded < tracker.startBytes) {
+            const tickDelta = tracker ? p.downloaded - tracker.prevDownloaded : 0;
+            const isRecheckJump = Boolean(
+              tracker && tickDelta > Math.max(25 * 1024 * 1024, p.speed * 8)
+            );
+            const stillIdle = Boolean(
+              tracker && tracker.speedSamples.length === 0 && p.speed === 0
+            );
+            if (
+              !tracker ||
+              p.downloaded < tracker.startBytes ||
+              isRecheckJump ||
+              stillIdle
+            ) {
               tracker = {
                 startedAtMs: now,
                 startBytes: p.downloaded,
+                prevDownloaded: p.downloaded,
                 speedSamples: p.speed > 0 ? [p.speed] : [],
               };
               sessionSpeedTrackers.set(p.id, tracker);
-            } else if (
-              p.speed > 0 &&
-              tracker.speedSamples.length < MAX_FALLBACK_SAMPLES
-            ) {
-              tracker.speedSamples.push(p.speed);
+            } else {
+              tracker.prevDownloaded = p.downloaded;
+              if (
+                p.speed > 0 &&
+                tracker.speedSamples.length < MAX_FALLBACK_SAMPLES
+              ) {
+                tracker.speedSamples.push(p.speed);
+              }
             }
             avgSpeedById[p.id] = computeAverageSpeedBps(
               tracker.startBytes,

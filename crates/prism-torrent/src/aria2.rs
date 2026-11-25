@@ -360,8 +360,11 @@ impl Aria2Backend {
             "--bt-min-crypto-level=plain",
             "--bt-require-crypto=false",
             "--bt-force-encryption=false",
-            "--bt-max-peers=256",
-            "--bt-request-peer-speed-limit=500K",
+            "--bt-max-peers=0",
+            "--bt-request-peer-speed-limit=50M",
+            "--bt-tracker-interval=60",
+            "--bt-tracker-connect-timeout=10",
+            "--bt-tracker-timeout=10",
             "--bt-max-open-files=256",
             "--seed-time=0",
             "--bt-detach-seed-only=true",
@@ -639,6 +642,7 @@ impl Aria2Backend {
         seen.insert(url.to_string(), meta.clone());
     }
 
+    #[allow(dead_code)]
     pub async fn add(
         &self,
         source: &TorrentSource,
