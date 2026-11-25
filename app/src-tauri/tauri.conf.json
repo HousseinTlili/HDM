@@ -56,8 +56,7 @@
       "icons/icon.ico"
     ],
     "externalBin": [
-      "binaries/prism-native-host",
-      "binaries/hdm-libtorrent"
+      "binaries/prism-native-host"
     ],
     "fileAssociations": [
       {

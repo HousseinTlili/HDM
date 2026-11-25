@@ -1,10 +1,7 @@
-//! BitTorrent and magnet-link downloads for HDM.
+//! BitTorrent and magnet-link downloads for HDM, powered natively by `librqbit` v9.
 //!
-//! Uses the bundled `libtorrent-rasterbar` (2.1.x, qBittorrent's exact C++ engine with
-//! TCP + uTP, MSE/PE encryption, DHT/PEX/LSD, UPnP/NAT-PMP, fast-resume, and Force Recheck)
-//! when available, with automatic fallback to `librqbit` v9 (also used for offline unit tests).
-
-mod libtorrent;
+//! Uses multi-threaded Tokio networking (TCP + uTP + UPnP, 256 peer limit, 16 worker threads,
+//! top-20 public trackers, and persistent fast-resume) directly inside `hdm.exe`.
 
 use anyhow::{Context, Result};
 use librqbit::api::TorrentIdOrHash;
@@ -14,6 +11,7 @@ use librqbit::{
     ListenerMode, ListenerOptions, ManagedTorrent, PeerConnectionOptions, Session, SessionOptions,
     SessionPersistenceConfig, TorrentStatsState, ValidatedTorrentMetaV1Info,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -22,10 +20,33 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 type ManagedTorrentHandle = Arc<ManagedTorrent>;
-use serde::{Deserialize, Serialize};
+
+/// Top public BitTorrent trackers injected into live sessions to speed up peer discovery.
+const TOP_PUBLIC_TRACKERS: &[&str] = &[
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.demonii.com:1337/announce",
+    "udp://open.stealth.si:80/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+    "udp://exodus.desync.com:6969/announce",
+    "udp://tracker.tiny-vps.com:6969/announce",
+    "https://tracker.tamersunion.org:443/announce",
+    "udp://explodie.org:6969/announce",
+    "udp://tracker.bittor.pw:1337/announce",
+    "udp://tracker.dler.org:6969/announce",
+    "udp://p4p.arenabg.com:1337/announce",
+    "udp://tracker.moeking.me:6969/announce",
+    "udp://retracker.lanta.me:2710/announce",
+    "udp://tracker.srv00.com:6969/announce",
+    "udp://tracker.filemail.com:6969/announce",
+    "udp://tracker1.bt.moack.co.kr:80/announce",
+    "udp://tracker.theoks.net:6969/announce",
+    "udp://opentracker.io:6969/announce",
+    "udp://movies.zsw.ca:6969/announce",
+    "http://tracker.openbittorrent.com:80/announce",
+];
 
 fn default_trackers() -> HashSet<url::Url> {
-    libtorrent::TOP_PUBLIC_TRACKERS
+    TOP_PUBLIC_TRACKERS
         .iter()
         .filter_map(|u| url::Url::parse(u).ok())
         .collect()
@@ -95,45 +116,23 @@ pub struct TorrentProgress {
     pub name: Option<String>,
 }
 
-enum Backend {
-    Libtorrent(libtorrent::LibtorrentBackend),
-    Librqbit {
-        session: Arc<Session>,
-        inspected: Mutex<HashMap<String, TorrentMeta>>,
-    },
-}
-
-/// A running BitTorrent session.
+/// A running native `librqbit` v9 BitTorrent session.
 pub struct TorrentEngine {
-    backend: Backend,
+    session: Arc<Session>,
+    /// Metadata `inspect` resolved for URL sources (magnets, .torrent links), so `add` knows
+    /// the torrent's layout without resolving it a second time.
+    inspected: Mutex<HashMap<String, TorrentMeta>>,
 }
 
 impl TorrentEngine {
-    /// Start the session. Prefers the bundled `libtorrent-rasterbar` (qBittorrent's engine)
-    /// and falls back cleanly to `librqbit` v9 (TCP+uTP+UPnP) if unavailable.
+    /// Start the session with TCP + uTP + UPnP, 256 peer limit, 16 worker threads, and
+    /// persistent fast-resume.
     pub async fn start(
         state_dir: &Path,
         default_output: PathBuf,
         keep: &(dyn Fn(&str) -> bool + Send + Sync),
     ) -> Result<Self> {
         std::fs::create_dir_all(state_dir).context("create torrent state dir")?;
-        if let Some(bin) = libtorrent::find_libtorrent_sidecar() {
-            match libtorrent::LibtorrentBackend::start(bin, state_dir, default_output.clone()).await
-            {
-                Ok(lt) => {
-                    return Ok(Self {
-                        backend: Backend::Libtorrent(lt),
-                    });
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        error = %err,
-                        "hdm-libtorrent sidecar failed to start, falling back to librqbit"
-                    );
-                }
-            }
-        }
-
         forget_saved(state_dir, keep);
         let peer_opts = Some(PeerConnectionOptions {
             connect_timeout: Some(Duration::from_secs(6)),
@@ -163,7 +162,11 @@ impl TorrentEngine {
         };
         match Self::with_options(default_output.clone(), opts).await {
             Ok(engine) => Ok(engine),
-            Err(_) => {
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "torrent listener startup failed, retrying without incoming listener"
+                );
                 let fallback_opts = SessionOptions {
                     fastresume: true,
                     persistence: Some(SessionPersistenceConfig::Json {
@@ -230,59 +233,51 @@ impl TorrentEngine {
             .await
             .context("start torrent session")?;
         Ok(Self {
-            backend: Backend::Librqbit {
-                session,
-                inspected: Mutex::new(HashMap::new()),
-            },
+            session,
+            inspected: Mutex::new(HashMap::new()),
         })
     }
 
     /// Read a torrent's metadata (resolving a magnet via DHT/trackers) without downloading.
     pub async fn inspect(&self, source: &TorrentSource) -> Result<TorrentMeta> {
-        match &self.backend {
-            Backend::Libtorrent(lt) => match lt.inspect(source).await {
-                Ok(meta) => Ok(meta),
-                Err(lt_err) => {
-                    if matches!(source, TorrentSource::Url(u) if u.trim_start().to_ascii_lowercase().starts_with("magnet:"))
-                    {
-                        tracing::warn!(error = %lt_err, "libtorrent magnet inspect timed out, falling back to librqbit metadata resolver");
-                        if let Ok(meta) = inspect_magnet_with_librqbit(source).await {
-                            return Ok(meta);
-                        }
-                    }
-                    Err(lt_err)
-                }
-            },
-            Backend::Librqbit { session, inspected } => {
-                let opts = AddTorrentOptions {
-                    list_only: true,
-                    ..Default::default()
-                };
-                let resp = session.add_torrent(source.to_add(), Some(opts)).await?;
-                let meta = match resp {
-                    AddTorrentResponse::ListOnly(list) => {
-                        meta_from_info(list.info_hash.as_string(), &list.info)
-                    }
-                    AddTorrentResponse::AlreadyManaged(_, handle)
-                    | AddTorrentResponse::Added(_, handle) => {
-                        meta_from_handle(&handle).context("torrent metadata not resolved yet")?
-                    }
-                };
-                if let TorrentSource::Url(url) = source {
-                    let mut seen = inspected.lock().unwrap_or_else(|e| e.into_inner());
-                    if seen.len() >= 64 {
-                        seen.clear();
-                    }
-                    seen.insert(url.clone(), meta.clone());
-                }
-                Ok(meta)
+        let opts = AddTorrentOptions {
+            list_only: true,
+            ..Default::default()
+        };
+        let resp = self
+            .session
+            .add_torrent(source.to_add(), Some(opts))
+            .await?;
+        let meta = match resp {
+            AddTorrentResponse::ListOnly(list) => {
+                meta_from_info(list.info_hash.as_string(), &list.info)
             }
+            AddTorrentResponse::AlreadyManaged(_, handle)
+            | AddTorrentResponse::Added(_, handle) => {
+                meta_from_handle(&handle).context("torrent metadata not resolved yet")?
+            }
+        };
+        if let TorrentSource::Url(url) = source {
+            let mut seen = self.inspected.lock().unwrap_or_else(|e| e.into_inner());
+            if seen.len() >= 64 {
+                seen.clear();
+            }
+            seen.insert(url.clone(), meta.clone());
         }
+        Ok(meta)
     }
 
-    /// Add (or re-attach to) a torrent and return its info-hash. A torrent with several
-    /// files goes into its own folder inside `output_folder` (see [`content_path`]), like in
-    /// other clients; a single file goes straight into `output_folder`.
+    async fn layout(&self, source: &TorrentSource) -> Result<TorrentMeta> {
+        if let TorrentSource::Url(url) = source {
+            let seen = self.inspected.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(meta) = seen.get(url) {
+                return Ok(meta.clone());
+            }
+        }
+        self.inspect(source).await
+    }
+
+    /// Add (or re-attach to) a torrent and return its info-hash.
     pub async fn add(
         &self,
         source: &TorrentSource,
@@ -301,135 +296,89 @@ impl TorrentEngine {
         output_folder: &Path,
         only_files: Option<Vec<usize>>,
         paused: bool,
-        force_recheck: bool,
-        sequential: bool,
+        _force_recheck: bool,
+        _sequential: bool,
         extra_trackers: &[String],
-        max_dl_bps: u64,
-        max_ul_bps: u64,
+        _max_dl_bps: u64,
+        _max_ul_bps: u64,
     ) -> Result<String> {
-        match &self.backend {
-            Backend::Libtorrent(lt) => {
-                lt.add_with_options(
-                    source,
-                    output_folder,
-                    only_files,
-                    paused,
-                    force_recheck,
-                    sequential,
-                    extra_trackers,
-                    max_dl_bps,
-                    max_ul_bps,
-                )
-                .await
-            }
-            Backend::Librqbit { session, inspected } => {
-                let meta = if let TorrentSource::Url(url) = source
-                    && let Some(cached) = inspected
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .get(url)
-                        .cloned()
-                {
-                    cached
-                } else {
-                    self.inspect(source).await?
-                };
-                let folder = if meta.files.len() >= 2 {
-                    content_path(output_folder, &meta)
-                } else {
-                    output_folder.to_path_buf()
-                };
-                let opts = AddTorrentOptions {
-                    paused,
-                    only_files,
-                    output_folder: Some(folder.to_string_lossy().into_owned()),
-                    overwrite: true,
-                    ..Default::default()
-                };
-                let resp = session.add_torrent(source.to_add(), Some(opts)).await?;
-                let handle = resp.into_handle().context("torrent was not added")?;
-                Ok(handle.info_hash().as_string())
-            }
-        }
+        let meta = self.layout(source).await?;
+        let folder = if meta.files.len() >= 2 {
+            content_path(output_folder, &meta)
+        } else {
+            output_folder.to_path_buf()
+        };
+        let trackers = if extra_trackers.is_empty() {
+            None
+        } else {
+            Some(extra_trackers.to_vec())
+        };
+        let opts = AddTorrentOptions {
+            paused,
+            only_files,
+            output_folder: Some(folder.to_string_lossy().into_owned()),
+            overwrite: true,
+            trackers,
+            ..Default::default()
+        };
+        let resp = self
+            .session
+            .add_torrent(source.to_add(), Some(opts))
+            .await?;
+        let handle = resp.into_handle().context("torrent was not added")?;
+        Ok(handle.info_hash().as_string())
     }
 
-    fn librqbit_handle(&self, info_hash: &str) -> Option<ManagedTorrentHandle> {
-        let Backend::Librqbit { session, .. } = &self.backend else {
-            return None;
-        };
+    fn handle(&self, info_hash: &str) -> Option<ManagedTorrentHandle> {
         let id = librqbit::dht::Id20::from_str(info_hash).ok()?;
-        session.get(TorrentIdOrHash::Hash(id))
+        self.session.get(TorrentIdOrHash::Hash(id))
     }
 
     pub fn is_managed(&self, info_hash: &str) -> bool {
-        match &self.backend {
-            Backend::Libtorrent(lt) => lt.is_managed(info_hash),
-            Backend::Librqbit { .. } => self.librqbit_handle(info_hash).is_some(),
-        }
+        self.handle(info_hash).is_some()
     }
 
     pub fn meta(&self, info_hash: &str) -> Option<TorrentMeta> {
-        match &self.backend {
-            Backend::Libtorrent(lt) => lt.meta(info_hash),
-            Backend::Librqbit { .. } => self
-                .librqbit_handle(info_hash)
-                .and_then(|h| meta_from_handle(&h)),
-        }
+        self.handle(info_hash).and_then(|h| meta_from_handle(&h))
     }
 
     pub fn progress(&self, info_hash: &str) -> Option<TorrentProgress> {
-        match &self.backend {
-            Backend::Libtorrent(lt) => lt.progress(info_hash),
-            Backend::Librqbit { .. } => {
-                let handle = self.librqbit_handle(info_hash)?;
-                let stats = handle.stats();
-                let live = stats.live.as_ref();
-                let mib = |mbps: f64| (mbps * 1024.0 * 1024.0).max(0.0) as u64;
-                let state = match stats.state {
-                    TorrentStatsState::Initializing { .. } => TorrentState::Initializing,
-                    TorrentStatsState::Paused => TorrentState::Paused,
-                    TorrentStatsState::Error => TorrentState::Error,
-                    TorrentStatsState::Live if stats.finished => TorrentState::Seeding,
-                    TorrentStatsState::Live => TorrentState::Downloading,
-                };
-                let download_speed = live.map(|l| mib(l.download_speed.mbps)).unwrap_or(0);
-                let remaining = stats.total_bytes.saturating_sub(stats.progress_bytes);
-                Some(TorrentProgress {
-                    state,
-                    downloaded: stats.progress_bytes,
-                    uploaded: stats.uploaded_bytes,
-                    total: stats.total_bytes,
-                    download_speed,
-                    upload_speed: live.map(|l| mib(l.upload_speed.mbps)).unwrap_or(0),
-                    peers: live.map(|l| l.snapshot.peer_stats.live).unwrap_or(0),
-                    eta_secs: (download_speed > 0 && !stats.finished)
-                        .then(|| remaining / download_speed),
-                    finished: stats.finished,
-                    error: stats.error.clone(),
-                    name: handle.name(),
-                })
-            }
-        }
+        let handle = self.handle(info_hash)?;
+        let stats = handle.stats();
+        let live = stats.live.as_ref();
+        let mib = |mbps: f64| (mbps * 1024.0 * 1024.0).max(0.0) as u64;
+        let state = match stats.state {
+            TorrentStatsState::Initializing { .. } => TorrentState::Initializing,
+            TorrentStatsState::Paused => TorrentState::Paused,
+            TorrentStatsState::Error => TorrentState::Error,
+            TorrentStatsState::Live if stats.finished => TorrentState::Seeding,
+            TorrentStatsState::Live => TorrentState::Downloading,
+        };
+        let download_speed = live.map(|l| mib(l.download_speed.mbps)).unwrap_or(0);
+        let remaining = stats.total_bytes.saturating_sub(stats.progress_bytes);
+        Some(TorrentProgress {
+            state,
+            downloaded: stats.progress_bytes,
+            uploaded: stats.uploaded_bytes,
+            total: stats.total_bytes,
+            download_speed,
+            upload_speed: live.map(|l| mib(l.upload_speed.mbps)).unwrap_or(0),
+            peers: live.map(|l| l.snapshot.peer_stats.live).unwrap_or(0),
+            eta_secs: (download_speed > 0 && !stats.finished).then(|| remaining / download_speed),
+            finished: stats.finished,
+            error: stats.error.clone(),
+            name: handle.name(),
+        })
     }
 
     pub async fn pause(&self, info_hash: &str) -> Result<()> {
-        match &self.backend {
-            Backend::Libtorrent(lt) => lt.pause(info_hash).await,
-            Backend::Librqbit { session, .. } => {
-                let handle = self.librqbit_handle(info_hash).context("unknown torrent")?;
-                session.pause(&handle).await
-            }
-        }
+        let handle = self.handle(info_hash).context("unknown torrent")?;
+        self.session.pause(&handle).await
     }
 
     pub async fn resume(&self, info_hash: &str) -> Result<()> {
-        match &self.backend {
-            Backend::Libtorrent(lt) => lt.resume(info_hash).await,
-            Backend::Librqbit { session, .. } => {
-                let handle = self.librqbit_handle(info_hash).context("unknown torrent")?;
-                session.unpause(&handle).await
-            }
-        }
+        let handle = self.handle(info_hash).context("unknown torrent")?;
+        self.session.unpause(&handle).await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -439,83 +388,56 @@ impl TorrentEngine {
         info_hash: Option<&str>,
         output_folder: &Path,
         only_files: Option<Vec<usize>>,
-        sequential: bool,
+        _sequential: bool,
         extra_trackers: &[String],
-        max_dl_bps: u64,
-        max_ul_bps: u64,
+        _max_dl_bps: u64,
+        _max_ul_bps: u64,
     ) -> Result<String> {
-        match &self.backend {
-            Backend::Libtorrent(lt) => {
-                lt.recheck(
-                    source,
-                    info_hash,
-                    output_folder,
-                    only_files,
-                    sequential,
-                    extra_trackers,
-                    max_dl_bps,
-                    max_ul_bps,
-                )
-                .await
-            }
-            Backend::Librqbit { .. } => {
-                if let Some(h) = info_hash {
-                    let _ = self.remove(h, false).await;
-                }
-                self.add(source, output_folder, only_files, false).await
-            }
+        if let Some(h) = info_hash {
+            let _ = self.remove(h, false).await;
         }
+        self.add_with_options(
+            source,
+            output_folder,
+            only_files,
+            false,
+            true,
+            false,
+            extra_trackers,
+            0,
+            0,
+        )
+        .await
     }
 
     pub async fn set_torrent_options(
         &self,
-        info_hash: &str,
-        sequential: Option<bool>,
-        extra_trackers: Option<&[String]>,
-        max_dl_bps: Option<u64>,
-        max_ul_bps: Option<u64>,
+        _info_hash: &str,
+        _sequential: Option<bool>,
+        _extra_trackers: Option<&[String]>,
+        _max_dl_bps: Option<u64>,
+        _max_ul_bps: Option<u64>,
     ) -> Result<()> {
-        match &self.backend {
-            Backend::Libtorrent(lt) => {
-                lt.set_torrent_options(info_hash, sequential, extra_trackers, max_dl_bps, max_ul_bps)
-                    .await
-            }
-            Backend::Librqbit { .. } => Ok(()),
-        }
+        Ok(())
     }
 
-    /// Stop managing a torrent, optionally deleting its files. Without deleting, its files are
-    /// closed and stay where they are, and the session no longer remembers it.
+    /// Stop managing a torrent, optionally deleting its files.
     pub async fn remove(&self, info_hash: &str, delete_files: bool) -> Result<()> {
-        match &self.backend {
-            Backend::Libtorrent(lt) => lt.remove(info_hash, delete_files).await,
-            Backend::Librqbit { session, .. } => {
-                let id = librqbit::dht::Id20::from_str(info_hash)?;
-                session
-                    .delete(TorrentIdOrHash::Hash(id), delete_files)
-                    .await
-            }
-        }
+        let id = librqbit::dht::Id20::from_str(info_hash)?;
+        self.session
+            .delete(TorrentIdOrHash::Hash(id), delete_files)
+            .await
     }
 
-    /// Global download limit in bytes/s (0 = unlimited). Upload is limited to the same
-    /// value to keep the link usable while seeding.
+    /// Global download limit in bytes/s (0 = unlimited).
     pub fn set_limits(&self, download_bps: u64, upload_bps: u64) {
-        match &self.backend {
-            Backend::Libtorrent(lt) => lt.set_limits(download_bps, upload_bps),
-            Backend::Librqbit { session, .. } => {
-                let nz = |v: u64| NonZeroU32::new(v.min(u32::MAX as u64) as u32);
-                session.ratelimits.set_download_bps(nz(download_bps));
-                session.ratelimits.set_upload_bps(nz(upload_bps));
-            }
-        }
+        let nz = |v: u64| NonZeroU32::new(v.min(u32::MAX as u64) as u32);
+        self.session.ratelimits.set_download_bps(nz(download_bps));
+        self.session.ratelimits.set_upload_bps(nz(upload_bps));
     }
 
     pub async fn shutdown(&self) {
-        match &self.backend {
-            Backend::Libtorrent(lt) => lt.shutdown().await,
-            Backend::Librqbit { session, .. } => session.stop().await,
-        }
+        self.session.stop().await;
     }
 
     /// Default limits used by tests and as a template for the app.
@@ -604,41 +526,6 @@ fn folder_name(name: &str) -> String {
         _ if reserved => format!("{s}_"),
         _ => s,
     }
-}
-
-async fn inspect_magnet_with_librqbit(source: &TorrentSource) -> Result<TorrentMeta> {
-    let tmp = std::env::temp_dir().join(format!("hdm-meta-{}", uuid::Uuid::new_v4().simple()));
-    let _ = std::fs::create_dir_all(&tmp);
-    let opts = SessionOptions {
-        listen: None,
-        persistence: None,
-        trackers: default_trackers(),
-        peer_limit: Some(128),
-        runtime_worker_threads: Some(4),
-        ..Default::default()
-    };
-    let session = Session::new_with_opts(tmp.clone(), opts)
-        .await
-        .context("start fallback magnet resolver")?;
-    let add_opts = AddTorrentOptions {
-        list_only: true,
-        ..Default::default()
-    };
-    let res = tokio::time::timeout(
-        Duration::from_secs(25),
-        session.add_torrent(source.to_add(), Some(add_opts)),
-    )
-    .await
-    .context("fallback magnet resolver timed out")??;
-    let meta = match res {
-        AddTorrentResponse::ListOnly(list) => meta_from_info(list.info_hash.as_string(), &list.info),
-        AddTorrentResponse::AlreadyManaged(_, h) | AddTorrentResponse::Added(_, h) => {
-            meta_from_handle(&h).context("torrent metadata not resolved")?
-        }
-    };
-    session.stop().await;
-    let _ = std::fs::remove_dir_all(&tmp);
-    Ok(meta)
 }
 
 fn meta_from_handle(handle: &ManagedTorrentHandle) -> Option<TorrentMeta> {

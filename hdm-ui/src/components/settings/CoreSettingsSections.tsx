@@ -565,13 +565,13 @@ export function TorrentSection({
 
   return (
     <div className="flex flex-col gap-5">
-      <SettingsCard title="High-Speed BitTorrent Engine (libtorrent)">
+      <SettingsCard title="Native Rust BitTorrent Engine (librqbit v9)">
         <SettingRow
           title="Peer Discovery & Transport"
-          description="Bundled C++ libtorrent-rasterbar 2.1 (qBittorrent's exact engine) with TCP + uTP, MSE/PE encryption, DHT/PEX/LSD, UPnP/NAT-PMP, 500 max connections, and fast-resume"
+          description="Native multi-threaded Rust librqbit v9 engine (16 workers) with TCP + uTP, UPnP port forwarding, DHT/PEX/LSD, 256 peer limit, top-20 public trackers, and persistent fast-resume"
         >
           <span className="font-mono text-mono-sm px-2.5 py-1 rounded-sm bg-status-connected-tint border border-status-connected/30 text-status-connected">
-            libtorrent 2.1 · TCP/uTP · MSE/PE · DHT/PEX/LSD
+            librqbit v9 · TCP/uTP · DHT/PEX/LSD · UPnP
           </span>
         </SettingRow>
 
