@@ -189,7 +189,7 @@ impl Default for Downloads {
         Self {
             default_dir: crate::paths::default_download_dir(),
             use_category_folders: true,
-            default_connections: 8,
+            default_connections: 16,
             max_connections: 32,
             conflict: ConflictAction::Ask,
             max_retries: 20,
@@ -229,8 +229,8 @@ impl Default for Connection {
     fn default() -> Self {
         Self {
             user_agent: String::new(),
-            connect_timeout_secs: 15,
-            read_timeout_secs: 30,
+            connect_timeout_secs: 10,
+            read_timeout_secs: 15,
             http_version: HttpVersion::Http1,
             max_connections_per_host: 0,
         }

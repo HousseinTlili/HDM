@@ -16,7 +16,7 @@ use crate::progress::DownloadEvent;
 /// Upper bound for a server-suggested `Retry-After`.
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(60);
 /// Target duration of one bounded request at the connection's measured speed.
-const REQUEST_SECONDS: f64 = 2.0;
+const REQUEST_SECONDS: f64 = 6.0;
 
 enum Pump {
     /// The assignment is finished (or was shrunk/raced away below the cursor).

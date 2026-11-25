@@ -15,28 +15,28 @@ pub struct EngineConfig {
     pub user_agent: String,
     /// Hard upper bound for connections per download (default 32).
     pub max_connections_cap: u8,
-    /// Connections used when a request asks for 0 (default 8).
+    /// Connections used when a request asks for 0 (default 16).
     pub default_connections: u8,
-    /// Connections opened immediately; the rest ramp up as connections prove healthy (default 4).
+    /// Connections opened immediately; the rest ramp up as connections prove healthy (default 8).
     pub initial_connections: u8,
     /// Minimum size of a split piece; a range is only split when at least twice this remains
     /// (default 1 MiB). Split points are 4 KiB aligned.
     pub min_split_size: u64,
     /// Smallest bounded range requested per HTTP request (default 4 MiB).
     pub min_request_size: u64,
-    /// Largest bounded range requested per HTTP request (default 16 MiB). Requests are sized
-    /// adaptively (~2 s of transfer at the connection's speed) within these bounds, so a split
+    /// Largest bounded range requested per HTTP request (default 64 MiB). Requests are sized
+    /// adaptively (~6 s of transfer at the connection's speed) within these bounds, so a split
     /// rarely aborts a socket and keep-alive connections are reused.
     pub max_request_size: u64,
-    /// Write coalescing buffer per stream in the writer thread (default 1 MiB).
+    /// Write coalescing buffer per stream in the writer thread (default 2 MiB).
     pub write_buffer: usize,
     /// Global budget for received-but-not-yet-written data across all downloads (default
-    /// 64 MiB). When exhausted, connections stop reading (TCP backpressure).
+    /// 128 MiB). When exhausted, connections stop reading (TCP backpressure).
     pub memory_budget: usize,
-    /// TCP/TLS connect timeout (default 15 s).
+    /// TCP/TLS connect timeout (default 10 s).
     pub connect_timeout: Duration,
     /// Stall detection: a connection that delivers no bytes for this long is dropped and
-    /// re-opened (default 30 s).
+    /// re-opened (default 15 s).
     pub read_timeout: Duration,
     /// Consecutive failures without progress before a connection gives up (default 10).
     pub max_retries: u32,
@@ -57,15 +57,15 @@ impl Default for EngineConfig {
         Self {
             user_agent: format!("Prism/{}", env!("CARGO_PKG_VERSION")),
             max_connections_cap: 32,
-            default_connections: 8,
-            initial_connections: 4,
+            default_connections: 16,
+            initial_connections: 8,
             min_split_size: 1 << 20,
             min_request_size: 4 << 20,
-            max_request_size: 16 << 20,
-            write_buffer: 1 << 20,
-            memory_budget: 64 << 20,
-            connect_timeout: Duration::from_secs(15),
-            read_timeout: Duration::from_secs(30),
+            max_request_size: 64 << 20,
+            write_buffer: 2 << 20,
+            memory_budget: 128 << 20,
+            connect_timeout: Duration::from_secs(10),
+            read_timeout: Duration::from_secs(15),
             max_retries: 10,
             temp_suffix: ".prismpart".into(),
             default_proxy: ProxyConfig::System,

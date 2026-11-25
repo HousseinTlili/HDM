@@ -15,16 +15,16 @@ const PUBLIC_KEY = readFileSync(join(root, 'keys', 'public-key.txt'), 'utf8').tr
 export const CHROME_EXTENSION_ID = 'mmcdeiglkbfbicdjboocmhehodogilfl';
 export const GECKO_ID = 'prism@prismdl.site';
 
-const description = 'Hand downloads, videos and links to the Prism download manager.';
+const description = 'Hand downloads, videos and links to HDM (Houssein Download Manager).';
 const icons = { 16: 'icons/icon-16.png', 32: 'icons/icon-32.png', 48: 'icons/icon-48.png', 128: 'icons/icon-128.png' };
 const common = {
   manifest_version: 3,
-  name: 'Prism Download Manager',
-  short_name: 'Prism',
+  name: 'HDM — Houssein Download Manager',
+  short_name: 'HDM',
   version: pkg.version,
   description,
   icons,
-  action: { default_popup: 'popup.html', default_title: 'Prism', default_icon: { 16: icons[16], 32: icons[32] } },
+  action: { default_popup: 'popup.html', default_title: 'HDM', default_icon: { 16: icons[16], 32: icons[32] } },
   options_ui: { page: 'options.html', open_in_tab: true },
   host_permissions: ['<all_urls>'],
   content_scripts: [{ matches: ['<all_urls>'], js: ['content.js'], run_at: 'document_start', all_frames: true }],

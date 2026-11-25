@@ -348,7 +348,7 @@ impl SegmentTable {
     }
 
     /// A segment whose estimated completion is far behind what a typical connection of this
-    /// download would need: more than 3 s left and at least 4× slower than typical.
+    /// download would need: more than 2 s left and at least 2.5× slower than typical.
     fn race_candidate(g: &Inner) -> Option<usize> {
         let mut peaks: Vec<u64> = g
             .segs
@@ -369,7 +369,7 @@ impl SegmentTable {
             })
             .filter(|(_, s)| {
                 let own = eta_secs(s.remaining(), s.meter.rate());
-                own > 3.0 && own > 4.0 * eta_secs(s.remaining(), typical)
+                own > 2.0 && own > 2.5 * eta_secs(s.remaining(), typical)
             })
             .max_by(|(_, a), (_, b)| {
                 eta_secs(a.remaining(), a.meter.rate())

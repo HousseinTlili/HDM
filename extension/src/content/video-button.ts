@@ -262,7 +262,7 @@ export class VideoButton {
     this.wrap = document.createElement('div');
     this.wrap.className = 'wrap';
     this.wrap.innerHTML = `
-      <button class="pill glass" type="button" aria-haspopup="menu" aria-expanded="false" title="Download this video with Prism">
+      <button class="pill glass" type="button" aria-haspopup="menu" aria-expanded="false" title="Download this video with HDM">
         ${prismMark(18)}<span class="label">Download</span><span class="chev">${icons.chevronDown(14)}</span>
       </button>
       <div class="menu glass" role="menu"></div>`;
@@ -536,9 +536,9 @@ export class VideoButton {
   }
 
   private renderMenu(title: string, res: VideoOptionsResult | undefined): void {
-    const head = `<div class="head">${prismMark(16)}<span class="t">${esc(res?.title || title)}</span><span class="src">${res?.source === 'probe' ? 'Prism' : 'Detected'}</span></div>`;
+    const head = `<div class="head">${prismMark(16)}<span class="t">${esc(res?.title || title)}</span><span class="src">${res?.source === 'probe' ? 'HDM' : 'Detected'}</span></div>`;
     if (!res) {
-      this.menu.innerHTML = `${head}<div class="note">Prism extension is restarting — try again in a moment.</div>`;
+      this.menu.innerHTML = `${head}<div class="note">HDM extension is restarting — try again in a moment.</div>`;
       return;
     }
     const own = res.options.some((o) => o.group === 'element');
@@ -588,12 +588,12 @@ export class VideoButton {
     const r = await sendInternal<ActionResult>({ kind: 'videoDownload', pageUrl: pageUrl ?? ctx.pageUrl, title, option });
     if (r?.ok) {
       this.pill.classList.add('done');
-      label.textContent = 'Sent to Prism';
+      label.textContent = 'Sent to HDM';
       this.pill.querySelector('.chev')!.innerHTML = icons.check(14);
     } else {
       this.pill.classList.add('err');
-      label.textContent = r?.error ? 'Prism unavailable' : 'Failed';
-      this.pill.title = r?.error ?? 'Could not reach Prism';
+      label.textContent = r?.error ? 'HDM unavailable' : 'Failed';
+      this.pill.title = r?.error ?? 'Could not reach HDM';
     }
     setTimeout(() => this.resetPill(), 2200);
   }
@@ -601,7 +601,7 @@ export class VideoButton {
   private resetPill(): void {
     if (!this.host) return;
     this.pill.classList.remove('done', 'err');
-    this.pill.title = 'Download this video with Prism';
+    this.pill.title = 'Download this video with HDM';
     this.pill.querySelector('.label')!.textContent = 'Download';
     this.pill.querySelector('.chev')!.innerHTML = icons.chevronDown(14);
   }

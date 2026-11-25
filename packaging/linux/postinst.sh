@@ -1,17 +1,16 @@
 #!/bin/sh
-# Prism post-install: system-wide native messaging manifests so every user's browser
-# can reach the app. (The app also registers per-user manifests on every start, which
+# HDM post-install: system-wide native messaging manifests so every user's browser
+# can reach the app. (HDM also registers per-user manifests on every start, which
 # covers Brave, Vivaldi, Opera and custom profiles.)
 set -e
 HOST=/usr/bin/prism-native-host
 CHROME_ID=mmcdeiglkbfbicdjboocmhehodogilfl
-FIREFOX_ID=prism@prism.dev
 
 chromium_manifest() {
   cat <<JSON
 {
   "name": "dev.prism.host",
-  "description": "Prism Download Manager native messaging host",
+  "description": "HDM (Houssein Download Manager) native messaging host",
   "path": "$HOST",
   "type": "stdio",
   "allowed_origins": ["chrome-extension://$CHROME_ID/"]
@@ -23,10 +22,10 @@ firefox_manifest() {
   cat <<JSON
 {
   "name": "dev.prism.host",
-  "description": "Prism Download Manager native messaging host",
+  "description": "HDM (Houssein Download Manager) native messaging host",
   "path": "$HOST",
   "type": "stdio",
-  "allowed_extensions": ["$FIREFOX_ID"]
+  "allowed_extensions": ["prism@prismdl.site", "prism@prism.dev"]
 }
 JSON
 }

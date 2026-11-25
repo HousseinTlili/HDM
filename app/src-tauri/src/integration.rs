@@ -44,6 +44,33 @@ pub fn host_path() -> PathBuf {
     bundled
 }
 
+/// Record `exe` inside `<data_dir>/app-path` so `prism-native-host` launches HDM.
+pub(crate) fn record_app_path_to(data_dir: &std::path::Path, exe: &std::path::Path) {
+    if std::fs::create_dir_all(data_dir).is_err() {
+        return;
+    }
+    let target = data_dir.join(prism_native_host::paths::APP_PATH_FILE_NAME);
+    let bytes = exe.to_string_lossy().into_owned().into_bytes();
+    if std::fs::read(&target).ok().as_ref() != Some(&bytes)
+        && let Err(e) = std::fs::write(&target, &bytes)
+    {
+        tracing::warn!("could not record HDM app-path: {e}");
+    }
+}
+
+/// Record the running HDM executable path in `<data_dir>/app-path` so `prism-native-host`
+/// auto-launches `hdm.exe` / `hdm` instead of looking for a sibling `prism` binary.
+pub fn record_app_path() {
+    if std::env::var_os("APPIMAGE").is_some() {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let data = prism_core::paths::data_dir();
+    record_app_path_to(&data, &exe);
+}
+
 /// Register the host for every supported browser (idempotent).
 pub fn register() -> Result<serde_json::Value, String> {
     let host = host_path();
@@ -361,5 +388,26 @@ mod tests {
         assert!(copy.join("icons/new.png").exists());
         assert!(!copy.join("icons/old.png").exists() && !copy.join("untouched").exists());
         assert!(!copy.with_extension("tmp").exists());
+    }
+
+    #[test]
+    fn recorded_hdm_path_is_resolved_by_native_host() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin_dir = tmp.path().join("portable");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let exe_name = if cfg!(windows) { "hdm.exe" } else { "hdm" };
+        let hdm_exe = bin_dir.join(exe_name);
+        let host_exe = bin_dir.join(prism_native_host::HOST_BINARY_NAME);
+        fs::write(&hdm_exe, b"exe").unwrap();
+        fs::write(&host_exe, b"host").unwrap();
+        fs::write(bin_dir.join("portable.txt"), "portable").unwrap();
+
+        let data_dir = prism_native_host::paths::portable_data_dir(&host_exe).unwrap();
+        assert_eq!(data_dir, bin_dir.join("data"));
+
+        super::record_app_path_to(&data_dir, &hdm_exe);
+        let resolved =
+            prism_native_host::paths::resolve_app_executable(None, Some(&data_dir), &host_exe);
+        assert_eq!(resolved, hdm_exe);
     }
 }

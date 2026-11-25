@@ -83,9 +83,12 @@ pub(crate) fn build_client(spec: &ClientSpec) -> Result<reqwest::Client, EngineE
         .connect_timeout(spec.connect_timeout)
         .read_timeout(spec.read_timeout)
         .pool_max_idle_per_host(spec.pool_max_idle.max(1))
-        .pool_idle_timeout(Duration::from_secs(90))
+        .pool_idle_timeout(Duration::from_secs(120))
         .tcp_nodelay(true)
         .tcp_keepalive(Duration::from_secs(30))
+        .http2_adaptive_window(true)
+        .http2_initial_stream_window_size(Some(4 * 1024 * 1024))
+        .http2_initial_connection_window_size(Some(16 * 1024 * 1024))
         .redirect(Policy::limited(MAX_REDIRECTS))
         .referer(false)
         .user_agent(spec.user_agent.clone());

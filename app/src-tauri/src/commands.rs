@@ -230,6 +230,37 @@ pub async fn add_torrent(core: State<'_, Core>, args: AddTorrentArgs) -> CmdResu
     .map_err(err)
 }
 
+#[tauri::command]
+pub async fn recheck_torrent(core: State<'_, Core>, id: String) -> CmdResult<()> {
+    core.recheck_torrent(&id).await.map_err(err)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TorrentOptionsArgs {
+    id: String,
+    sequential: Option<bool>,
+    extra_trackers: Option<Vec<String>>,
+    max_dl_bps: Option<u64>,
+    max_ul_bps: Option<u64>,
+}
+
+#[tauri::command]
+pub async fn set_torrent_options(
+    core: State<'_, Core>,
+    args: TorrentOptionsArgs,
+) -> CmdResult<DownloadItem> {
+    core.set_torrent_options(
+        &args.id,
+        args.sequential,
+        args.extra_trackers,
+        args.max_dl_bps,
+        args.max_ul_bps,
+    )
+    .await
+    .map_err(err)
+}
+
 // ----- "What's inside" a ZIP in the Download File window -------------------------------------
 
 /// The files in the ZIP a Download File window is about to download. Errors are codes the
@@ -260,12 +291,6 @@ pub async fn cancel_zip_file(core: State<'_, Core>, id: String, index: u32) -> C
 }
 
 // ----- Hugging Face models (#29) ------------------------------------------------------------
-
-/// Whether the OS puts a material (Mica / vibrancy) behind the window (see main.rs).
-#[tauri::command]
-pub fn native_material() -> bool {
-    crate::native_material_supported()
-}
 
 #[tauri::command]
 pub async fn hf_context(core: State<'_, Core>) -> CmdResult<prism_core::huggingface::Context> {
@@ -362,12 +387,6 @@ pub fn media_jobs(core: State<'_, Core>) -> Vec<prism_core::media::MediaJob> {
 #[tauri::command]
 pub fn media_clear(core: State<'_, Core>) -> Vec<prism_core::media::MediaJob> {
     core.media_clear()
-}
-
-/// Open (or bring forward) the Tools window: `{tab, paths?, preset?}`.
-#[tauri::command]
-pub async fn open_tools(app: AppHandle, request: serde_json::Value) -> CmdResult<()> {
-    windows::open_tools(&app, &request).map_err(err)
 }
 
 /// Open a file (a Tools result). A file that's gone is an error, not a new folder.
@@ -808,23 +827,10 @@ pub async fn open_extension_store(app: AppHandle, browser: String) -> CmdResult<
 // ----- shell / windows ---------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn open_details(app: AppHandle, id: String) -> CmdResult<()> {
-    windows::open_details(&app, &id).map_err(err)
-}
-
-#[tauri::command]
-pub async fn open_window(app: AppHandle, kind: String, id: Option<String>) -> CmdResult<()> {
-    windows::open(&app, &kind, id.as_deref()).map_err(err)
-}
-
-#[tauri::command]
-pub async fn toggle_mini(app: AppHandle) -> CmdResult<bool> {
-    windows::toggle_mini(&app).map_err(err)
-}
-
-#[tauri::command]
-pub async fn toggle_dropzone(app: AppHandle) -> CmdResult<bool> {
-    windows::toggle_dropzone(&app).map_err(err)
+pub async fn drain_ui_intents(
+    intents: State<'_, crate::PendingIntents>,
+) -> CmdResult<Vec<crate::IntentEnvelope>> {
+    Ok(intents.drain())
 }
 
 #[tauri::command]
@@ -911,4 +917,448 @@ pub async fn clipboard_write(text: String) -> CmdResult<()> {
 #[tauri::command]
 pub async fn data_dir(app: AppHandle) -> CmdResult<PathBuf> {
     Ok(app.state::<Core>().data_dir().to_path_buf())
+}
+
+// ----- HDM bridge commands -----------------------------------------------------------------
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HdmConfirmCaptureArgs {
+    pub id: String,
+    pub file_name: Option<String>,
+    pub save_dir: Option<PathBuf>,
+    pub category: Option<String>,
+    pub description: Option<String>,
+    pub mode: StartMode,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub remember_dir: bool,
+    pub conflict: Option<prism_core::settings::ConflictAction>,
+    pub connections: Option<u8>,
+    pub checksum: Option<String>,
+}
+
+/// Confirm a pending capture with optional HDM connection count and checksum overrides.
+#[tauri::command]
+pub async fn hdm_confirm_capture(
+    core: State<'_, Core>,
+    args: HdmConfirmCaptureArgs,
+) -> CmdResult<DownloadItem> {
+    let checksum_trimmed = args
+        .checksum
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let has_extra = args.connections.is_some() || checksum_trimmed.is_some();
+
+    let decision = CaptureDecision {
+        id: args.id,
+        file_name: args.file_name,
+        save_dir: args.save_dir,
+        category: args.category,
+        description: args.description,
+        mode: args.mode,
+        username: args.username,
+        password: args.password,
+        remember_dir: args.remember_dir,
+        conflict: args.conflict,
+    };
+
+    if !has_extra {
+        return core.confirm_capture(decision).map_err(err);
+    }
+
+    let desired_mode = decision.mode.clone();
+    let item = core
+        .confirm_capture(CaptureDecision {
+            mode: StartMode::Later,
+            ..decision
+        })
+        .map_err(err)?;
+
+    let updated = core
+        .update_item(
+            &item.id,
+            ItemPatch {
+                connections: args.connections.map(|c| c.clamp(1, 32)),
+                checksum: checksum_trimmed.map(Some),
+                ..Default::default()
+            },
+        )
+        .map_err(err)?;
+
+    match desired_mode {
+        StartMode::Now => core.start_items(std::slice::from_ref(&updated.id)),
+        StartMode::Queue(q) => core.assign_to_queue(std::slice::from_ref(&updated.id), Some(q)),
+        StartMode::Later => {}
+    }
+
+    Ok(core.item(&updated.id).unwrap_or(updated))
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Sha256Verification {
+    pub actual: String,
+    pub expected: Option<String>,
+    pub matches: Option<bool>,
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(DIGITS[(b >> 4) as usize] as char);
+        out.push(DIGITS[(b & 15) as usize] as char);
+    }
+    out
+}
+
+pub(crate) fn verify_file_sha256(
+    path: &std::path::Path,
+    expected: Option<&str>,
+) -> std::io::Result<Sha256Verification> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let actual = hex_lower(&hasher.finalize());
+
+    let trimmed = expected.map(str::trim).filter(|s| !s.is_empty());
+    let (normalized_expected, matches) = match trimmed {
+        None => (None, None),
+        Some(raw) => {
+            let candidate = raw
+                .get(..7)
+                .filter(|p| p.eq_ignore_ascii_case("sha256:"))
+                .map(|_| raw[7..].trim())
+                .or_else(|| (!raw.contains(':')).then_some(raw));
+            match candidate {
+                Some(hex) if hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()) => {
+                    let lower = hex.to_ascii_lowercase();
+                    let ok = actual == lower;
+                    (Some(lower), Some(ok))
+                }
+                _ => (Some(raw.to_string()), None),
+            }
+        }
+    };
+
+    Ok(Sha256Verification {
+        actual,
+        expected: normalized_expected,
+        matches,
+    })
+}
+
+/// Compute SHA-256 checksum on disk for a completed single-file download.
+#[tauri::command]
+pub async fn verify_item_sha256(
+    core: State<'_, Core>,
+    id: String,
+) -> CmdResult<Sha256Verification> {
+    let item = core.item(&id).ok_or("unknown item")?;
+    if item.kind == ItemKind::Torrent {
+        return Err("SHA-256 verification applies to single-file downloads".into());
+    }
+    let path = item.path();
+    if !path.is_file() {
+        return Err("File not found on disk".into());
+    }
+    let expected = item.checksum.clone();
+    tauri::async_runtime::spawn_blocking(move || verify_file_sha256(&path, expected.as_deref()))
+        .await
+        .map_err(err)?
+        .map_err(err)
+}
+
+/// Remove completed non-torrent items whose output file is missing while their save directory exists.
+#[tauri::command]
+pub async fn clear_missing_completed(core: State<'_, Core>) -> CmdResult<usize> {
+    let candidates: Vec<(String, PathBuf, PathBuf)> = core
+        .bootstrap()
+        .items
+        .into_iter()
+        .filter(|i| {
+            i.status == Status::Completed
+                && !i.trashed
+                && i.kind != ItemKind::Torrent
+                && !i.file_name.is_empty()
+        })
+        .map(|i| {
+            let path = i.path();
+            (i.id, i.save_dir, path)
+        })
+        .collect();
+
+    if candidates.is_empty() {
+        return Ok(0);
+    }
+
+    let gone: Vec<String> = tauri::async_runtime::spawn_blocking(move || {
+        candidates
+            .into_iter()
+            .filter(|(_, dir, path)| dir.is_dir() && !path.exists())
+            .map(|(id, _, _)| id)
+            .collect()
+    })
+    .await
+    .map_err(err)?;
+
+    if gone.is_empty() {
+        return Ok(0);
+    }
+
+    let count = gone.len();
+    core.delete_items(&gone, false, true).await.map_err(err)?;
+    Ok(count)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeedTestResult {
+    pub latency_ms: u64,
+    pub download_bps: u64,
+    pub bytes_tested: u64,
+}
+
+/// Measure real multi-stream download throughput (4 parallel sockets) and latency against Cloudflare.
+#[tauri::command]
+pub async fn run_speed_test() -> CmdResult<SpeedTestResult> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .tcp_nodelay(true)
+        .user_agent("HDM-SpeedTest/0.1")
+        .build()
+        .map_err(err)?;
+
+    let ping_start = std::time::Instant::now();
+    client
+        .get("https://speed.cloudflare.com/__down?bytes=0")
+        .send()
+        .await
+        .map_err(err)?
+        .error_for_status()
+        .map_err(err)?;
+    let latency_ms = ping_start.elapsed().as_millis().max(1) as u64;
+
+    let dl_start = std::time::Instant::now();
+    let max_duration = std::time::Duration::from_secs(8);
+    let mut streams = tokio::task::JoinSet::new();
+    for _ in 0..4 {
+        let c = client.clone();
+        streams.spawn(async move {
+            let mut resp = c
+                .get("https://speed.cloudflare.com/__down?bytes=10485760")
+                .send()
+                .await?
+                .error_for_status()?;
+            let mut bytes = 0u64;
+            while let Some(chunk) = resp.chunk().await? {
+                bytes += chunk.len() as u64;
+                if dl_start.elapsed() >= max_duration {
+                    break;
+                }
+            }
+            Ok::<u64, reqwest::Error>(bytes)
+        });
+    }
+
+    let mut total_bytes: u64 = 0;
+    let mut last_err: Option<reqwest::Error> = None;
+    while let Some(res) = streams.join_next().await {
+        match res {
+            Ok(Ok(n)) => total_bytes += n,
+            Ok(Err(e)) => last_err = Some(e),
+            Err(_) => {}
+        }
+    }
+    if total_bytes == 0
+        && let Some(e) = last_err
+    {
+        return Err(err(e));
+    }
+
+    let secs = dl_start.elapsed().as_secs_f64().max(0.001);
+    let download_bps = (total_bytes as f64 / secs).round() as u64;
+
+    Ok(SpeedTestResult {
+        latency_ms,
+        download_bps,
+        bytes_tested: total_bytes,
+    })
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HfBrowseArgs {
+    pub query: Option<String>,
+    pub sort: Option<String>,
+    pub gguf_only: Option<bool>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HfBrowseHit {
+    pub id: String,
+    pub downloads: Option<u64>,
+    pub likes: Option<u64>,
+    pub pipeline_tag: Option<String>,
+    pub gguf: bool,
+    pub gated: bool,
+    pub tags: Vec<String>,
+    pub last_modified: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct RawHfBrowseModel {
+    id: String,
+    downloads: Option<u64>,
+    likes: Option<u64>,
+    #[serde(rename = "pipeline_tag")]
+    pipeline_tag: Option<String>,
+    tags: Vec<String>,
+    gated: serde_json::Value,
+    last_modified: Option<String>,
+}
+
+/// Browse or search Hugging Face models with sort + GGUF filter for zero-browser discovery.
+#[tauri::command]
+pub async fn hf_browse(core: State<'_, Core>, args: HfBrowseArgs) -> CmdResult<Vec<HfBrowseHit>> {
+    let ctx = core.hf_context();
+    let endpoint = ctx.endpoint.trim_end_matches('/');
+    let sort = match args.sort.as_deref() {
+        Some("downloads") => "downloads",
+        Some("likes") => "likes",
+        Some("recent") => "lastModified",
+        _ => "trendingScore",
+    };
+    let limit = args.limit.unwrap_or(24).clamp(6, 48);
+    let mut url = format!("{endpoint}/api/models?sort={sort}&direction=-1&limit={limit}");
+    if let Some(q) = args.query.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
+        let encoded = percent_encoding::utf8_percent_encode(q, percent_encoding::NON_ALPHANUMERIC);
+        url.push_str("&search=");
+        url.push_str(&encoded.to_string());
+    }
+    if args.gguf_only == Some(true) {
+        url.push_str("&filter=gguf");
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .tcp_nodelay(true)
+        .user_agent("HDM-ModelHub/0.1")
+        .build()
+        .map_err(err)?;
+
+    let mut req = client
+        .get(&url)
+        .header(reqwest::header::ACCEPT, "application/json");
+    let token = core.settings().hugging_face.token.trim().to_string();
+    if !token.is_empty() {
+        req = req.bearer_auth(token);
+    }
+
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach Hugging Face Hub: {e}"))?;
+
+    if !resp.status().is_success() {
+        let code = resp.status().as_u16();
+        return Err(match code {
+            401 => "hf:badToken".into(),
+            429 => "hf:rateLimited".into(),
+            _ => format!("Hugging Face Hub returned HTTP {code}"),
+        });
+    }
+
+    let raw: Vec<RawHfBrowseModel> = resp
+        .json()
+        .await
+        .map_err(|e| format!("Unexpected response from Hugging Face Hub: {e}"))?;
+
+    Ok(raw
+        .into_iter()
+        .filter(|m| m.id.contains('/'))
+        .map(|m| {
+            let gguf = m.tags.iter().any(|t| t == "gguf")
+                || m.id.to_ascii_lowercase().contains("gguf");
+            let gated = !matches!(m.gated, serde_json::Value::Null | serde_json::Value::Bool(false));
+            HfBrowseHit {
+                id: m.id,
+                downloads: m.downloads,
+                likes: m.likes,
+                pipeline_tag: m.pipeline_tag,
+                gguf,
+                gated,
+                tags: m.tags.into_iter().take(6).collect(),
+                last_modified: m.last_modified,
+            }
+        })
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verify_sha256_cases() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("abc.bin");
+        std::fs::write(&file, b"abc").unwrap();
+        let expected_digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+        let none_case = verify_file_sha256(&file, None).unwrap();
+        assert_eq!(none_case.actual, expected_digest);
+        assert_eq!(none_case.expected, None);
+        assert_eq!(none_case.matches, None);
+
+        let upper_prefixed = format!("sha256:{}", expected_digest.to_ascii_uppercase());
+        let match_case = verify_file_sha256(&file, Some(&upper_prefixed)).unwrap();
+        assert_eq!(match_case.actual, expected_digest);
+        assert_eq!(match_case.expected.as_deref(), Some(expected_digest));
+        assert_eq!(match_case.matches, Some(true));
+
+        let wrong_digest = "0".repeat(64);
+        let mismatch_case = verify_file_sha256(&file, Some(&wrong_digest)).unwrap();
+        assert_eq!(mismatch_case.actual, expected_digest);
+        assert_eq!(mismatch_case.expected.as_deref(), Some(wrong_digest.as_str()));
+        assert_eq!(mismatch_case.matches, Some(false));
+
+        let md5_digest = "md5:900150983cd24fb0d6963f7d28e17f72";
+        let non_sha_case = verify_file_sha256(&file, Some(md5_digest)).unwrap();
+        assert_eq!(non_sha_case.actual, expected_digest);
+        assert_eq!(non_sha_case.expected.as_deref(), Some(md5_digest));
+        assert_eq!(non_sha_case.matches, None);
+    }
+
+    #[test]
+    fn hdm_confirm_capture_args_deserializes_camel_case() {
+        let raw = serde_json::json!({
+            "id": "cap-1",
+            "fileName": "model.gguf",
+            "connections": 16,
+            "checksum": "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            "mode": { "type": "queue", "queueId": "main" }
+        });
+        let args: HdmConfirmCaptureArgs = serde_json::from_value(raw).unwrap();
+        assert_eq!(args.id, "cap-1");
+        assert_eq!(args.file_name.as_deref(), Some("model.gguf"));
+        assert_eq!(args.connections, Some(16));
+        assert_eq!(args.mode, StartMode::Queue("main".into()));
+    }
 }

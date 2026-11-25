@@ -1,4 +1,4 @@
-//! System tray icon with a quick menu and live state (idle / downloading / paused).
+//! System tray icon with a quick menu and live state (idle / downloading).
 
 use crate::i18n::tr;
 use prism_core::manager::Core;
@@ -8,7 +8,7 @@ use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry};
 
-pub const TRAY_ID: &str = "prism-tray";
+pub const TRAY_ID: &str = "hdm-tray";
 
 /// Windows and Linux put the icon in the tray, macOS in the menu bar.
 const HIDE_LABEL: &str = if cfg!(target_os = "macos") {
@@ -17,8 +17,6 @@ const HIDE_LABEL: &str = if cfg!(target_os = "macos") {
     "Hide tray icon"
 };
 
-// Windows/Linux trays are usually dark: white glyphs. macOS uses template images
-// (black + alpha) that the menu bar tints for light/dark automatically.
 #[cfg(not(target_os = "macos"))]
 static ICON_IDLE: &[u8] = include_bytes!("../icons/tray/tray-idle.png");
 #[cfg(not(target_os = "macos"))]
@@ -27,8 +25,6 @@ static ICON_ACTIVE: &[u8] = include_bytes!("../icons/tray/tray-downloading.png")
 static ICON_IDLE: &[u8] = include_bytes!("../icons/tray/tray-idle-template.png");
 #[cfg(target_os = "macos")]
 static ICON_ACTIVE: &[u8] = include_bytes!("../icons/tray/tray-downloading-template.png");
-// Windows (#118): dark glyphs for a light taskbar, where the white ones can't be seen
-// (assets/brand/png/tray/tray-*-dark-32.png).
 #[cfg(windows)]
 static ICON_IDLE_LIGHT: &[u8] = include_bytes!("../icons/tray/tray-idle-light.png");
 #[cfg(windows)]
@@ -56,8 +52,7 @@ fn set_icon(tray: &TrayIcon, active: bool) {
     }
 }
 
-/// Windows: whether the taskbar is light (Settings → Personalization → Colors → "Choose your
-/// mode", the Windows part), watched so the icon follows a change at once.
+/// Windows: whether the taskbar is light, watched so the icon follows changes immediately.
 #[cfg(windows)]
 mod taskbar {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -67,14 +62,11 @@ mod taskbar {
     pub static LIGHT: AtomicBool = AtomicBool::new(false);
     const KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
 
-    /// `SystemUsesLightTheme` = 1; a missing value (older Windows 10) is the dark taskbar.
     fn read(key: &RegKey) -> bool {
         key.get_value::<u32, _>("SystemUsesLightTheme")
             .is_ok_and(|v| v == 1)
     }
 
-    /// Reads the current mode, then waits for changes on a thread of its own and calls
-    /// `changed` when the mode flips. Without the key, the taskbar is treated as dark.
     pub fn watch(changed: impl Fn() + Send + 'static) {
         let Ok(key) =
             RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags(KEY, KEY_READ | KEY_NOTIFY)
@@ -91,7 +83,6 @@ mod taskbar {
                     REG_NOTIFY_CHANGE_LAST_SET, RegNotifyChangeKeyValue,
                 };
                 loop {
-                    // Blocks until a value under the key changes.
                     let r = unsafe {
                         RegNotifyChangeKeyValue(
                             key.raw_handle() as _,
@@ -120,14 +111,13 @@ mod taskbar {
 
 pub struct TrayState {
     pub limiter: CheckMenuItem<Wry>,
-    /// Menu items with the English text they show (relabelled when the UI language changes).
     items: Vec<(MenuItem<Wry>, &'static str)>,
 }
 
 pub fn create(app: &AppHandle) -> tauri::Result<TrayIcon> {
     let item = |id: &str, text: &str| MenuItem::with_id(app, id, tr(text, &[]), true, None::<&str>);
-    let show = item("show", "Open Prism")?;
-    let add = item("add", "Add URL…")?;
+    let show = item("show", "Open HDM")?;
+    let add = item("add", "New Download…")?;
     let pause = item("pause_all", "Pause all")?;
     let resume = item("resume_all", "Resume all")?;
     let limiter_on = app
@@ -143,10 +133,8 @@ pub fn create(app: &AppHandle) -> tauri::Result<TrayIcon> {
         limiter_on,
         None::<&str>,
     )?;
-    let mini = item("mini", "Mini window")?;
-    let drop = item("dropzone", "Drop zone")?;
     let hide = item("hide_tray", HIDE_LABEL)?;
-    let quit = item("quit", "Quit Prism")?;
+    let quit = item("quit", "Quit HDM")?;
     let sep = || PredefinedMenuItem::separator(app);
     let menu = Menu::with_items(
         app,
@@ -158,9 +146,6 @@ pub fn create(app: &AppHandle) -> tauri::Result<TrayIcon> {
             &resume,
             &limiter,
             &sep()?,
-            &mini,
-            &drop,
-            &sep()?,
             &hide,
             &quit,
         ],
@@ -168,14 +153,12 @@ pub fn create(app: &AppHandle) -> tauri::Result<TrayIcon> {
     app.manage(TrayState {
         limiter: limiter.clone(),
         items: vec![
-            (show.clone(), "Open Prism"),
-            (add.clone(), "Add URL…"),
+            (show.clone(), "Open HDM"),
+            (add.clone(), "New Download…"),
             (pause.clone(), "Pause all"),
             (resume.clone(), "Resume all"),
-            (mini.clone(), "Mini window"),
-            (drop.clone(), "Drop zone"),
             (hide.clone(), HIDE_LABEL),
-            (quit.clone(), "Quit Prism"),
+            (quit.clone(), "Quit HDM"),
         ],
     });
 
@@ -192,7 +175,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<TrayIcon> {
     let tray = TrayIconBuilder::with_id(TRAY_ID)
         .icon(Image::from_bytes(icon_bytes(false))?)
         .icon_as_template(cfg!(target_os = "macos"))
-        .tooltip("Prism")
+        .tooltip("HDM")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| {
@@ -200,7 +183,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<TrayIcon> {
             match event.id().as_ref() {
                 "show" => crate::windows::show_main(&app),
                 "add" => {
-                    let _ = crate::windows::open(&app, "addurl", None);
+                    crate::push_ui_intent(&app, crate::HdmIntent::New { url: None });
                 }
                 "pause_all" => app.state::<Core>().pause_all(),
                 "resume_all" => app.state::<Core>().resume_all(),
@@ -208,18 +191,10 @@ pub fn create(app: &AppHandle) -> tauri::Result<TrayIcon> {
                     let _ = app.state::<Core>().toggle_speed_limiter();
                     refresh(&app);
                 }
-                "mini" => {
-                    let _ = crate::windows::toggle_mini(&app);
-                }
-                "dropzone" => {
-                    let _ = crate::windows::toggle_dropzone(&app);
-                }
                 "hide_tray" => {
                     let _ = app.state::<Core>().update_settings(&serde_json::json!({
                         "general": { "hideTrayIcon": true }
                     }));
-                    // The menu that offered this is gone now: open the window so Prism is not left
-                    // running with nothing on screen to click.
                     if !crate::windows::main_is_open(&app) {
                         crate::windows::show_main(&app);
                     }
@@ -248,14 +223,12 @@ pub fn create(app: &AppHandle) -> tauri::Result<TrayIcon> {
     Ok(tray)
 }
 
-/// Show or hide the tray icon ("Hide the tray icon" in the settings or in the tray menu).
 pub fn sync_visibility(app: &AppHandle, hidden: bool) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         let _ = tray.set_visible(!hidden);
     }
 }
 
-/// Sync the limiter check mark with settings.
 pub fn refresh(app: &AppHandle) {
     let on = app
         .state::<Core>()
@@ -267,7 +240,6 @@ pub fn refresh(app: &AppHandle) {
     }
 }
 
-/// Show the menu in the current UI language.
 pub fn relabel(app: &AppHandle) {
     if let Some(state) = app.try_state::<TrayState>() {
         for (item, text) in &state.items {
@@ -277,16 +249,15 @@ pub fn relabel(app: &AppHandle) {
     }
 }
 
-/// Update icon + tooltip from aggregate progress (called on each progress event).
 pub fn update(app: &AppHandle, active: usize, speed: u64, icon_changed: bool) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return;
     };
     let tooltip = if active == 0 {
-        tr("Prism — idle", &[])
+        tr("HDM — idle", &[])
     } else {
         tr(
-            "Prism — {count} downloading · {speed}",
+            "HDM — {count} downloading · {speed}",
             &[
                 ("count", &active.to_string()),
                 ("speed", &human_speed(speed)),

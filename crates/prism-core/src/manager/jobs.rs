@@ -269,10 +269,13 @@ pub(crate) fn engine_config(s: &Settings) -> EngineConfig {
     } else {
         s.connection.user_agent.clone()
     };
+    let default_connections = s.downloads.default_connections.clamp(1, 32);
+    let initial_connections = (default_connections / 2).clamp(4, 16).min(default_connections);
     EngineConfig {
         user_agent,
         max_connections_cap: s.downloads.max_connections.clamp(1, 32),
-        default_connections: s.downloads.default_connections.clamp(1, 32),
+        default_connections,
+        initial_connections,
         connect_timeout: Duration::from_secs(s.connection.connect_timeout_secs.max(3)),
         read_timeout: Duration::from_secs(s.connection.read_timeout_secs.max(5)),
         max_retries: s.downloads.max_retries.max(1),
@@ -1552,14 +1555,40 @@ impl TorrentJob {
                     .get("onlyFiles")
                     .cloned()
                     .and_then(|v| serde_json::from_value(v).ok());
+                let force_recheck = spec
+                    .get("forceRecheck")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let sequential = spec
+                    .get("sequential")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let extra_trackers: Vec<String> = spec
+                    .get("extraTrackers")
+                    .cloned()
+                    .and_then(|v| serde_json::from_value(v).ok())
+                    .unwrap_or_default();
+                let max_dl_bps = spec.get("maxDlBps").and_then(|v| v.as_u64()).unwrap_or(0);
+                let max_ul_bps = spec.get("maxUlBps").and_then(|v| v.as_u64()).unwrap_or(0);
                 tokio::fs::create_dir_all(&item.save_dir).await?;
                 let h = tokio::select! {
-                    r = engine.add(&source, &item.save_dir, only, false) => r?,
+                    r = engine.add_with_options(
+                        &source,
+                        &item.save_dir,
+                        only,
+                        false,
+                        force_recheck,
+                        sequential,
+                        &extra_trackers,
+                        max_dl_bps,
+                        max_ul_bps,
+                    ) => r?,
                     _ = self.stop.cancelled() => return Ok(None),
                 };
                 core.with_item(&item.id, |i| {
                     if let Some(obj) = i.request.as_mut().and_then(|r| r.as_object_mut()) {
                         obj.insert("infoHash".into(), serde_json::json!(h));
+                        obj.remove("forceRecheck");
                     }
                 });
                 h

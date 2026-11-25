@@ -10,11 +10,11 @@ import { native } from './native';
 type Ctx = chrome.contextMenus.ContextType;
 
 const ITEMS: Array<{ id: string; title: string; contexts: Ctx[] }> = [
-  { id: 'prism-link', title: 'Download with Prism', contexts: ['link', 'image', 'video', 'audio'] as Ctx[] },
-  { id: 'prism-selection', title: 'Download selection links with Prism', contexts: ['selection'] as Ctx[] },
-  { id: 'prism-all-links', title: 'Download all links with Prism', contexts: ['page', 'selection'] as Ctx[] },
-  { id: 'prism-all-images', title: 'Download all images with Prism', contexts: ['page', 'image'] as Ctx[] },
-  { id: 'prism-all-videos', title: 'Download all videos with Prism', contexts: ['page', 'video', 'audio'] as Ctx[] },
+  { id: 'prism-link', title: 'Download with HDM', contexts: ['link', 'image', 'video', 'audio'] as Ctx[] },
+  { id: 'prism-selection', title: 'Download selection links with HDM', contexts: ['selection'] as Ctx[] },
+  { id: 'prism-all-links', title: 'Download all links with HDM', contexts: ['page', 'selection'] as Ctx[] },
+  { id: 'prism-all-images', title: 'Download all images with HDM', contexts: ['page', 'image'] as Ctx[] },
+  { id: 'prism-all-videos', title: 'Download all videos with HDM', contexts: ['page', 'video', 'audio'] as Ctx[] },
 ];
 
 export async function createMenus(): Promise<void> {

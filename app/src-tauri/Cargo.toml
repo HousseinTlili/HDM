@@ -4,11 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Prism Download Manager"
-default-run = "prism"
+description = "Houssein Download Manager (HDM)"
+default-run = "hdm"
 
 [[bin]]
-name = "prism"
+name = "hdm"
 path = "src/main.rs"
 
 [build-dependencies]
@@ -18,7 +18,7 @@ tauri-build = { version = "2.7", features = [] }
 prism-core = { workspace = true }
 prism-native-host = { path = "../../crates/prism-native-host" }
 prism-torrent = { path = "../../crates/prism-torrent" }
-tauri = { version = "2.12", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri = { version = "2.12", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2.5"
 tauri-plugin-notification = "2.6"
 tauri-plugin-autostart = "2.7"
@@ -26,9 +26,7 @@ tauri-plugin-dialog = "2.8"
 tauri-plugin-opener = "2.7"
 tauri-plugin-window-state = "2.5"
 tauri-plugin-global-shortcut = "2.4"
-tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
-window-vibrancy = "0.8"
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -37,6 +35,10 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = "0.2"
 url = { workspace = true }
+sha2 = { workspace = true }
+reqwest = { workspace = true }
+regex = { workspace = true }
+percent-encoding = { workspace = true }
 arboard = { version = "3.6", default-features = false }
 
 [dev-dependencies]
@@ -53,4 +55,4 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_Registry", "Win32_UI_Input_KeyboardAndMouse"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_UI_Input_KeyboardAndMouse"] }

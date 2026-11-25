@@ -1,20 +1,25 @@
-# Builds the Windows portable zip from a finished release build.
+# Builds the HDM Windows portable zip from a finished release build.
 # Usage: ./scripts/make-portable.ps1 [-Target x86_64-pc-windows-msvc]
 param([string]$Target = "x86_64-pc-windows-msvc")
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $release = Join-Path $root "target\$Target\release"
-if (-not (Test-Path (Join-Path $release "prism.exe"))) { $release = Join-Path $root "target\release" }
+if (-not (Test-Path (Join-Path $release "hdm.exe"))) { $release = Join-Path $root "target\release" }
+if (-not (Test-Path (Join-Path $release "hdm.exe"))) { throw "hdm.exe not found in target\$Target\release or target\release" }
 $version = (Get-Content (Join-Path $root "app\src-tauri\tauri.conf.json") | ConvertFrom-Json).version
-$stage = Join-Path $root "packaging\out\Prism-$version-portable"
-$zip = Join-Path $root "packaging\out\Prism-$version-windows-x64-portable.zip"
+$stage = Join-Path $root "packaging\out\HDM-$version-portable"
+$zip = Join-Path $root "packaging\out\HDM-$version-windows-x64-portable.zip"
 
 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $stage | Out-Null
-Copy-Item (Join-Path $release "prism.exe") $stage
+Copy-Item (Join-Path $release "hdm.exe") $stage
 Copy-Item (Join-Path $root "app\src-tauri\binaries\prism-native-host-$Target.exe") (Join-Path $stage "prism-native-host.exe")
-# portable.txt switches the data directory to .\data next to prism.exe
-Set-Content -Path (Join-Path $stage "portable.txt") -Value "Prism portable mode: settings and history are stored in the data folder next to prism.exe." -Encoding utf8
+$aria2Bin = Join-Path $root "app\src-tauri\binaries\aria2c-$Target.exe"
+if (Test-Path $aria2Bin) {
+  Copy-Item $aria2Bin (Join-Path $stage "aria2c.exe")
+}
+# portable.txt switches the data directory to .\data next to hdm.exe
+Set-Content -Path (Join-Path $stage "portable.txt") -Value "HDM portable mode: settings and history are stored in the data folder next to hdm.exe." -Encoding utf8
 $ext = Join-Path $root "extension\build"
 if (Test-Path $ext) {
   New-Item -ItemType Directory -Force (Join-Path $stage "extension") | Out-Null

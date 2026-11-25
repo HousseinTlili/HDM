@@ -259,9 +259,9 @@ impl WriterThread {
                         continue;
                     }
                     self.add(worker, seg, offset, data, permit);
-                    // Under memory pressure, release everything we hold.
+                    // Under memory pressure, flush mature buffers first instead of stalling on micro-writes.
                     if self.budget.available_permits() < self.budget_total / 4 {
-                        self.flush_all();
+                        self.flush_largest_half();
                     }
                 }
                 Ok(Msg::Flush { sync, reply }) => {
@@ -360,6 +360,36 @@ impl WriterThread {
             data: buf,
             permit: Some(permit),
         });
+    }
+
+    fn flush_largest_half(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let threshold = self.write_buffer / 2;
+        let mut flushed = Vec::new();
+        let mut keep = Vec::with_capacity(self.pending.len());
+        for p in std::mem::take(&mut self.pending) {
+            if p.data.len() >= threshold {
+                flushed.push(p);
+            } else {
+                keep.push(p);
+            }
+        }
+        if flushed.is_empty() {
+            // None reached half the write buffer yet; flush the single largest buffer to free budget.
+            if let Some((idx, _)) = keep
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, p)| p.data.len())
+            {
+                flushed.push(keep.swap_remove(idx));
+            }
+        }
+        self.pending = keep;
+        for p in flushed {
+            self.write(p);
+        }
     }
 
     fn flush_all(&mut self) {

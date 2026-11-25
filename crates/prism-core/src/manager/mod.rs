@@ -1052,6 +1052,92 @@ impl Core {
         Ok(engine)
     }
 
+    /// Force-recheck an existing torrent: verifies every piece already on disk and resumes
+    /// downloading any missing or corrupt pieces.
+    pub async fn recheck_torrent(&self, id: &str) -> Result<()> {
+        let item = self.item(id).ok_or_else(|| anyhow!("unknown item"))?;
+        if item.kind != ItemKind::Torrent {
+            anyhow::bail!("recheck is only supported for torrents");
+        }
+        // Stop any active job cleanly (files on disk stay intact).
+        self.pause_items(&[id.to_string()]);
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let engine = self.torrent_engine().await?;
+        if let Some(hash) = item
+            .request
+            .as_ref()
+            .and_then(|r| r.get("infoHash"))
+            .and_then(|v| v.as_str())
+        {
+            let _ = engine.remove(hash, false).await;
+        }
+        self.with_item(id, |i| {
+            i.status = Status::Paused;
+            i.error = None;
+            let obj = i
+                .request
+                .get_or_insert_with(|| serde_json::json!({}))
+                .as_object_mut();
+            if let Some(map) = obj {
+                map.insert("forceRecheck".into(), serde_json::json!(true));
+            }
+        });
+        self.start_items(&[id.to_string()]);
+        Ok(())
+    }
+
+    /// Update qBittorrent-style per-torrent options (sequential head/tail priority, custom
+    /// trackers, and per-torrent DL/UL speed caps) and apply live if running.
+    pub async fn set_torrent_options(
+        &self,
+        id: &str,
+        sequential: Option<bool>,
+        extra_trackers: Option<Vec<String>>,
+        max_dl_bps: Option<u64>,
+        max_ul_bps: Option<u64>,
+    ) -> Result<DownloadItem> {
+        let updated = self
+            .with_item(id, |i| {
+                let req = i.request.get_or_insert_with(|| serde_json::json!({}));
+                if let Some(map) = req.as_object_mut() {
+                    if let Some(seq) = sequential {
+                        map.insert("sequential".into(), serde_json::json!(seq));
+                    }
+                    if let Some(ref trackers) = extra_trackers {
+                        map.insert("extraTrackers".into(), serde_json::json!(trackers));
+                    }
+                    if let Some(dl) = max_dl_bps {
+                        map.insert("maxDlBps".into(), serde_json::json!(dl));
+                    }
+                    if let Some(ul) = max_ul_bps {
+                        map.insert("maxUlBps".into(), serde_json::json!(ul));
+                    }
+                }
+                i.clone()
+            })
+            .ok_or_else(|| anyhow!("unknown item"))?;
+
+        if let Some(hash) = updated
+            .request
+            .as_ref()
+            .and_then(|r| r.get("infoHash"))
+            .and_then(|v| v.as_str())
+            && let Ok(engine) = self.torrent_engine().await
+        {
+            let _ = engine
+                .set_torrent_options(
+                    hash,
+                    sequential,
+                    extra_trackers.as_deref(),
+                    max_dl_bps,
+                    max_ul_bps,
+                )
+                .await;
+        }
+        Ok(updated)
+    }
+
     /// Which saved torrents the session should load again: the ones of downloads that aren't
     /// finished. A finished torrent loaded again holds its files open and brings deleted ones
     /// back (#82). Torrents no download knows are dropped too, unless an unfinished torrent's

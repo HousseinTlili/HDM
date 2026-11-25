@@ -22,9 +22,9 @@ use crate::progress::DownloadEvent;
 /// Supervisor tick (speed meters, ramp-up, limit probing).
 const TICK: Duration = Duration::from_millis(250);
 /// After a worker gave up, wait this long before spawning replacements.
-const GIVE_UP_HOLD: Duration = Duration::from_secs(10);
+const GIVE_UP_HOLD: Duration = Duration::from_secs(3);
 /// First delay before trying one more connection after a server limit was detected.
-const PROBE_UP_FIRST: Duration = Duration::from_secs(20);
+const PROBE_UP_FIRST: Duration = Duration::from_secs(10);
 /// Probe delay after the server asked us to slow down (`Retry-After`): request-rate limited
 /// servers count every extra request, so stay at the working connection count for long.
 const RATE_LIMITED_PROBE: Duration = Duration::from_secs(300);

@@ -67,7 +67,7 @@ impl Default for VideoOptions {
             user_agent: None,
             proxy: None,
             prefer_system_ffmpeg: true,
-            concurrent_fragments: 8,
+            concurrent_fragments: 16,
             delete_temp_inputs: true,
             extra_ytdlp_args: Vec::new(),
         }

@@ -1685,7 +1685,7 @@ mod tests {
         assert_eq!(o.ffmpeg_path, None);
         assert_eq!(o.proxy.as_deref(), Some("http://p:8080"));
         assert_eq!(o.channel, UpdateChannel::Stable);
-        assert_eq!(o.concurrent_fragments, 8);
+        assert_eq!(o.concurrent_fragments, 16);
         assert!(o.prefer_system_ffmpeg);
     }
 
